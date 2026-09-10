@@ -1,0 +1,45 @@
+# Python / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+backend/venv/
+backend/.env
+backend/*.log
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/chroma_data/
+backend/.pytest_cache/
+backend/.mypy_cache/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.log
+frontend/.vite/
+
+# IDEs and OS
+.vscode/
+.idea/
+*.swp
+*.sublime-*
+.DS_Store
+Thumbs.db
+
+# Data and caches
+chroma_data/
+huggingface_cache/
+ollama.log
+uploads/*
+!uploads/.gitkeep
+*.log
+
+# Claude / session local state
+.claude/scheduled_tasks.json
+.claude/settings.json
+.claude/settings.local.json

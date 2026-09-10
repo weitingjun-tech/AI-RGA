@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: rag-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: rag_knowledge_base
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init-database.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    restart: unless-stopped
+
+  # ChromaDB 向量数据库
+  chroma:
+    image: chromadb/chroma
+    container_name: rag-chroma
+    ports:
+      - "8000:8000"  # ChromaDB 默认端口
+    volumes:
+      - chroma_data:/app/chroma
+    environment:
+      ALLOW_RESET: "true"
+    restart: unless-stopped
+
+  # Ollama AI 服务
+  ollama:
+    image: ollama/ollama
+    container_name: rag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    command: serve
+
+  # RAG 后端服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    ports:
+      - "8001:8000"  # 避免与 ChromaDB 冲突
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=root
+      - MYSQL_DATABASE=rag_knowledge_base
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CHROMA_PERSIST_DIR=/app/chroma_data
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/chroma_data:/app/chroma_data
+    depends_on:
+      - mysql
+      - chroma
+      - ollama
+    restart: unless-stopped
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8001
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  chroma_data:
+  ollama_data:

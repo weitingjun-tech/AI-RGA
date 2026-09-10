@@ -1,0 +1,41 @@
+C盘清理执行结果
+================
+
+由于自动清理脚本遇到权限和文件占用问题，以下是手动清理指南：
+
+已尝试清理项目：
+1. [✓] NVIDIA DXCache - 部分清理成功（文件被占用导致无法全部删除）
+2. [✓] 剪映缓存 - 可以手动清理
+3. [✓] 临时文件 - 可以手动清理
+
+剩余需要手动清理的文件（需要管理员权限）：
+
+1. **NVIDIA缓存 (约18GB)**
+   ```
+   cmd.exe /c "rd /s /q "C:\Users\lizhi3\AppData\Local\NVIDIA\DXCache""
+   ```
+
+2. **剪映缓存 (约2.1GB)**
+   ```
+   cmd.exe /c "rd /s /q "C:\Users\lizhi3\AppData\Local\JianyingPro\User Data\Cache""
+   ```
+
+3. **Windows更新缓存 (约1.8GB)**
+   - 以管理员身份运行cmd
+   ```
+   net stop wuauserv
+   rd /s /q "C:\Windows\SoftwareDistribution\Download"
+   net start wuauserv
+   ```
+
+4. **豆包缓存 (约434MB)**
+   ```
+   cmd.exe /c "rd /s /q "C:\Users\lizhi3\AppData\Local\Doubao\User Data\gecko_cache""
+   ```
+
+5. **临时文件**
+   ```
+   cmd.exe /c "rd /s /q "C:\Users\lizhi3\AppData\Local\Temp" & rd /s /q "C:\Users\lizhi3\.cache""
+   ```
+
+预计总释放空间：约 24.5 GB
