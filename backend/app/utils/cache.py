@@ -48,6 +48,34 @@ class LRUCache:
 
 _cache = LRUCache()
 
+# 失效回调：语料变更时，除检索结果缓存外，其它派生于语料的缓存
+# （如 BM25 倒排索引）也必须一并失效。用注册机制而非直接 import，
+# 避免 utils 层反向依赖 services 层造成循环导入。
+_invalidation_hooks: list[Callable[[], None]] = []
+
+
+def register_invalidation_hook(fn: Callable[[], None]) -> None:
+    """注册一个「语料已变更」时需要执行的清理函数"""
+    if fn not in _invalidation_hooks:
+        _invalidation_hooks.append(fn)
+
+
+def clear_cache() -> int:
+    """清空查询缓存及其它派生于语料的缓存，返回清理前的条目数。
+
+    **重要**：知识库发生任何变更（文档新增/删除/重新索引）后必须调用本函数。
+    否则缓存中仍保留基于旧语料计算的检索结果，用户会在 TTL（默认 300 秒）内
+    看到「引用已删除文档」的错误答案。
+    """
+    size = len(_cache._cache)
+    _cache.clear()
+    for hook in _invalidation_hooks:
+        try:
+            hook()
+        except Exception:
+            pass
+    return size
+
 
 def query_cache(func: Callable) -> Callable:
     """装饰器：根据函数参数缓存返回结果"""

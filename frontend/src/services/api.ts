@@ -66,6 +66,13 @@ export const chatApi = {
     api.put(`/api/chat/conversations/${id}?title=${encodeURIComponent(title)}`),
   getMessages: (convId: number, page: number = 1) =>
     api.get(`/api/chat/conversations/${convId}/messages?page=${page}&page_size=20`),
+  /** 提交对某条回答的反馈（点赞 / 点踩） */
+  submitFeedback: (
+    messageId: number,
+    feedback: 'up' | 'down',
+    reason?: string,
+    comment?: string,
+  ) => api.post(`/api/chat/messages/${messageId}/feedback`, { feedback, reason, comment }),
   // 流式请求不经过 axios（直接 fetch + SSE）
 };
 

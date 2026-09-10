@@ -53,6 +53,10 @@ export interface Message {
   content: string;
   sources?: SourceCitation[];
   created_at: string;
+  /** 用户反馈：up=有帮助 down=没帮助 */
+  feedback?: FeedbackType | null;
+  feedback_reason?: string | null;
+  feedback_comment?: string | null;
 }
 
 export interface ChatRequest {
@@ -73,6 +77,8 @@ export interface KnowledgeBase {
   created_at?: string;
 }
 
+export type FeedbackType = 'up' | 'down';
+
 export interface Document {
   id: number;
   filename: string;
@@ -89,6 +95,8 @@ export interface SSEChunk {
   type: 'chunk' | 'done' | 'error';
   content?: string;
   conversation_id?: number;
+  /** 助手消息落库后的真实 ID，前端据此提交反馈 */
+  message_id?: number;
   sources?: SourceCitation[];
   message?: string;
 }

@@ -1,0 +1,198 @@
+# -*- coding: utf-8 -*-
+"""
+RAG 检索质量评估脚本。
+
+回答一个核心问题：**改动检索策略后，到底变好了还是变坏了？**
+
+指标定义：
+- Hit@K  : 期望文档是否出现在 Top-K 中（只要命中一个就算）
+- Recall@K: 期望文档被召回的比例（多文档问题才有区分度）
+- MRR@K  : 第一个命中文档的排名倒数，越接近 1 说明正确文档排得越靠前
+- 拒答正确率: 知识库无答案时，最高相似度是否低于阈值（即不应给出引用）
+
+用法：
+    python run_eval.py                # 对比 向量-only / 混合检索
+    python run_eval.py --config hybrid
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
+os.environ.setdefault("HF_HOME", "D:/mydo/huggingface_cache")
+
+from app.config import RELEVANCE_THRESHOLD, RETRIEVAL_TOP_K
+from app.services import rag_service
+from app.utils.cache import clear_cache
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PREFIX_RE = re.compile(r"^[0-9a-f]{32}_")
+
+
+def clean_doc_name(name: str) -> str:
+    """去掉上传时加在文件名前的 uuid 前缀"""
+    return PREFIX_RE.sub("", name or "")
+
+
+def load_golden_set() -> list[dict]:
+    with open(os.path.join(HERE, "golden_set.json"), encoding="utf-8") as f:
+        return json.load(f)["cases"]
+
+
+def retrieve_docs(query: str, collections: list[str], top_k: int) -> tuple[list[str], list[float]]:
+    """返回 (按相关性排序的文档名列表, 对应的相似度列表)"""
+    results = rag_service.retrieve(query, top_k, collections)
+    metas = results.get("metadatas", [[]])[0]
+    dists = results.get("distances", [[]])[0]
+    docs = [clean_doc_name(m.get("doc_name", "")) for m in metas]
+    sims = [round(1.0 - d, 4) for d in dists]
+    return docs, sims
+
+
+def evaluate(label: str, collections: list[str], top_k: int) -> dict:
+    cases = load_golden_set()
+    rows = []
+
+    for c in cases:
+        t0 = time.time()
+        docs, sims = retrieve_docs(c["query"], collections, top_k)
+        latency = (time.time() - t0) * 1000
+
+        expected = set(c["expected_docs"])
+        if c["type"] == "refusal":
+            # 拒答场景：最高相似度低于阈值 → 正确（不会给出无来源的回答）
+            max_sim = max(sims) if sims else 0.0
+            rows.append({
+                "id": c["id"], "type": c["type"],
+                "hit": max_sim < RELEVANCE_THRESHOLD,
+                "recall": 1.0 if max_sim < RELEVANCE_THRESHOLD else 0.0,
+                "rr": 1.0 if max_sim < RELEVANCE_THRESHOLD else 0.0,
+                "max_sim": max_sim, "latency_ms": latency,
+            })
+            continue
+
+        hit = any(d in expected for d in docs)
+        inter = len(expected & set(docs))
+        recall = inter / len(expected) if expected else 0.0
+        rr = 0.0
+        for rank, d in enumerate(docs, 1):
+            if d in expected:
+                rr = 1.0 / rank
+                break
+        rows.append({
+            "id": c["id"], "type": c["type"],
+            "hit": hit, "recall": recall, "rr": rr,
+            "docs": docs[:top_k], "latency_ms": latency,
+        })
+
+    n = len(rows)
+    hit_rate = sum(1 for r in rows if r["hit"]) / n
+    mean_recall = sum(r["recall"] for r in rows) / n
+    mrr = sum(r["rr"] for r in rows) / n
+    avg_latency = sum(r["latency_ms"] for r in rows) / n
+
+    by_type: dict[str, list] = {}
+    for r in rows:
+        by_type.setdefault(r["type"], []).append(r)
+
+    return {
+        "label": label,
+        "n": n,
+        "hit_rate": hit_rate,
+        "recall": mean_recall,
+        "mrr": mrr,
+        "avg_latency_ms": avg_latency,
+        "by_type": {
+            t: {
+                "n": len(rs),
+                "hit_rate": sum(1 for r in rs if r["hit"]) / len(rs),
+                "recall": sum(r["recall"] for r in rs) / len(rs),
+                "mrr": sum(r["rr"] for r in rs) / len(rs),
+            }
+            for t, rs in by_type.items()
+        },
+        "rows": rows,
+    }
+
+
+def print_result(res: dict):
+    print(f"\n{'='*76}")
+    print(f"配置: {res['label']}")
+    print(f"{'='*76}")
+    print(f"  样本数: {res['n']}    Hit@{RETRIEVAL_TOP_K}: {res['hit_rate']:.1%}    "
+          f"Recall@{RETRIEVAL_TOP_K}: {res['recall']:.1%}    MRR: {res['mrr']:.3f}    "
+          f"平均检索耗时: {res['avg_latency_ms']:.0f}ms")
+    print()
+    print(f"  {'问题类型':<12}{'样本':<6}{'Hit率':<10}{'Recall':<10}{'MRR'}")
+    print(f"  {'-'*50}")
+    for t, m in sorted(res["by_type"].items()):
+        print(f"  {t:<12}{m['n']:<6}{m['hit_rate']:<10.1%}{m['recall']:<10.1%}{m['mrr']:.3f}")
+
+    misses = [r for r in res["rows"] if not r["hit"]]
+    if misses:
+        print(f"\n  未命中样本 ({len(misses)} 条):")
+        for r in misses:
+            extra = f" max_sim={r.get('max_sim')}" if r["type"] == "refusal" else f" 实际召回={r.get('docs', [])[:3]}"
+            print(f"    ✗ {r['id']} [{r['type']}]{extra}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", choices=["both", "vector", "hybrid"], default="both")
+    ap.add_argument("--kb-id", type=int, default=2, help="要评估的知识库 ID")
+    args = ap.parse_args()
+
+    from app.database import SessionLocal
+    from app.models.knowledge_base import KnowledgeBase
+
+    db = SessionLocal()
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == args.kb_id).first()
+    if not kb:
+        print(f"知识库不存在: id={args.kb_id}")
+        return
+    collections = [kb.collection_name]
+    print(f"评估知识库: {kb.name} (collection={kb.collection_name})")
+    db.close()
+
+    configs = []
+    if args.config in ("both", "vector"):
+        configs.append(("向量检索（基线）", False, False))
+    if args.config in ("both", "hybrid"):
+        configs.append(("混合检索 + 去冗余", True, True))
+
+    results = []
+    for label, hybrid, dedup in configs:
+        # 运行时切换检索配置（重新加载配置需重启，这里直接改模块变量）
+        rag_service.HYBRID_SEARCH_ENABLED = hybrid
+        rag_service.DEDUP_ENABLED = dedup
+        clear_cache()          # 清空检索缓存与 BM25 索引，确保两次配置互不污染
+        rag_service.clear_bm25_cache()
+
+        res = evaluate(label, collections, RETRIEVAL_TOP_K)
+        results.append(res)
+        print_result(res)
+
+    if len(results) == 2:
+        a, b = results
+        print(f"\n{'='*76}")
+        print("对比结论")
+        print(f"{'='*76}")
+        print(f"  Hit@{RETRIEVAL_TOP_K}  : {a['hit_rate']:.1%} → {b['hit_rate']:.1%}  "
+              f"({(b['hit_rate']-a['hit_rate'])*100:+.1f} 个百分点)")
+        print(f"  Recall@{RETRIEVAL_TOP_K}: {a['recall']:.1%} → {b['recall']:.1%}  "
+              f"({(b['recall']-a['recall'])*100:+.1f} 个百分点)")
+        print(f"  MRR     : {a['mrr']:.3f} → {b['mrr']:.3f}  ({b['mrr']-a['mrr']:+.3f})")
+        print(f"  延迟    : {a['avg_latency_ms']:.0f}ms → {b['avg_latency_ms']:.0f}ms  "
+              f"({b['avg_latency_ms']-a['avg_latency_ms']:+.0f}ms)")
+
+    out = os.path.join(HERE, "eval_result.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump([{k: v for k, v in r.items()} for r in results], f, ensure_ascii=False, indent=2)
+    print(f"\n结果已保存: {out}")
+
+
+if __name__ == "__main__":
+    main()

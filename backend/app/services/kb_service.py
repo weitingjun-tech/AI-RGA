@@ -38,6 +38,10 @@ from app.config import (
 )
 from app.models.document import Document
 from app.models.knowledge_base import KnowledgeBase
+from app.utils.cache import clear_cache
+
+import logging
+logger = logging.getLogger("rag-app")
 
 
 # ==================== Embedding 模型（单例懒加载） ====================
@@ -251,6 +255,13 @@ def process_document(db: Session, doc_id: int, file_path: str, filename: str) ->
         doc.chunk_count = len(chunks)
         db.commit()
 
+        # 6. 语料已变更，清空检索缓存，避免返回过期结果
+        cleared = clear_cache()
+        logger.info(
+            f"文档处理完成 doc_id={doc_id} chunks={len(chunks)} "
+            f"collection={collection.name} 清理检索缓存={cleared} 条"
+        )
+
     except Exception as e:
         doc.status = "error"
         db.commit()
@@ -276,6 +287,10 @@ def delete_document_from_chroma(db: Session, doc_id: int) -> None:
                 collection.delete(ids=ids_to_delete)
         except Exception:
             pass
+
+    # 语料已变更，清空检索缓存，避免用户继续看到引用已删除文档的答案
+    cleared = clear_cache()
+    logger.info(f"文档向量已删除 doc_id={doc_id} collection={collection.name} 清理检索缓存={cleared} 条")
 
 
 def reindex_document(db: Session, doc_id: int) -> None:

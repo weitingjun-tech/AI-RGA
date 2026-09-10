@@ -14,6 +14,7 @@ from app.models.document import Document
 from app.models.knowledge_base import KnowledgeBase
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.retrieval_log import RetrievalLog
 from app.schemas import (
     DocumentResponse,
     DocumentList,
@@ -409,3 +410,117 @@ def delete_knowledge_base(
     drop_collection(collection_name)
 
     return {"message": f"知识库「{kb.name}」已删除"}
+
+
+# ==================== 运营闭环：bad case 归档 ====================
+
+@router.get("/bad-cases")
+def list_bad_cases(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """列出被用户点踩的回答（bad case），用于知识库补漏与回归测试集建设。
+
+    每条记录附带当次检索的明细，可直接判断失败原因属于：
+    - 检索问题（BM25/向量候选里压根没有正确文档）
+    - 生成问题（检索到了，但模型没用上）
+    """
+    offset = (page - 1) * page_size
+    total = db.query(Message).filter(Message.feedback == "down").count()
+    msgs = (
+        db.query(Message)
+        .filter(Message.feedback == "down")
+        .order_by(Message.feedback_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    items = []
+    for m in msgs:
+        # 取同会话中该回答之前最近的一条用户提问
+        question = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == m.conversation_id,
+                Message.id < m.id,
+                Message.role == "user",
+            )
+            .order_by(Message.id.desc())
+            .first()
+        )
+        log = None
+        if m.retrieval_log_id:
+            rl = db.query(RetrievalLog).filter(RetrievalLog.id == m.retrieval_log_id).first()
+            if rl:
+                log = {
+                    "id": rl.id,
+                    "vector_candidates": len(rl.vector_hits or []),
+                    "bm25_candidates": len(rl.bm25_hits or []),
+                    "fused_count": rl.fused_count,
+                    "final_count": rl.final_count,
+                    "latency_ms": rl.latency_ms,
+                }
+        items.append({
+            "message_id": m.id,
+            "conversation_id": m.conversation_id,
+            "question": question.content if question else None,
+            "answer": m.content,
+            "reason": m.feedback_reason,
+            "comment": m.feedback_comment,
+            "feedback_at": m.feedback_at.isoformat() if m.feedback_at else None,
+            "sources": m.sources,
+            "retrieval_log": log,
+        })
+
+    return {"items": items, "total": total}
+
+
+@router.get("/retrieval-stats")
+def retrieval_stats(
+    limit: int = 200,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """检索质量概览：取最近 N 次检索统计两路召回的贡献与延迟。"""
+    logs = (
+        db.query(RetrievalLog)
+        .order_by(RetrievalLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+    if not logs:
+        return {"sample": 0, "message": "暂无检索日志"}
+
+    n = len(logs)
+    bm25_only = 0
+    vector_only = 0
+    both = 0
+    latencies = []
+
+    for rl in logs:
+        v_ids = {h["chunk_id"] for h in (rl.vector_hits or [])}
+        b_ids = {h["chunk_id"] for h in (rl.bm25_hits or [])}
+        final_ids = set(rl.final_chunk_ids or [])
+        hit_v = bool(final_ids & v_ids)
+        hit_b = bool(final_ids & b_ids)
+        if hit_v and hit_b:
+            both += 1
+        elif hit_b:
+            bm25_only += 1
+        elif hit_v:
+            vector_only += 1
+        if rl.latency_ms is not None:
+            latencies.append(rl.latency_ms)
+
+    latencies.sort()
+    return {
+        "sample": n,
+        "both_paths_contributed": both,
+        "bm25_only_contributed": bm25_only,      # BM25 独有贡献 = 混合检索的增量价值
+        "vector_only_contributed": vector_only,
+        "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else None,
+        "p95_latency_ms": latencies[int(len(latencies) * 0.95)] if latencies else None,
+    }

@@ -26,7 +26,7 @@ interface ChatState {
   addMessage: (msg: Message) => void;
   setStreaming: (v: boolean) => void;
   appendStreamingContent: (chunk: string) => void;
-  finishStreaming: (sources?: SourceCitation[]) => void;
+  finishStreaming: (sources?: SourceCitation[], messageId?: number) => void;
   clearStreamingContent: () => void;
 
   // SSE 发送消息
@@ -128,15 +128,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setStreaming: (v) => set({ streaming: v }),
   appendStreamingContent: (chunk) =>
     set((s) => ({ streamingContent: s.streamingContent + chunk })),
-  finishStreaming: (sources) => {
+  finishStreaming: (sources, messageId) => {
     const { streamingContent, currentConversation, messages } = get();
     if (streamingContent) {
       const msg: Message = {
-        id: Date.now(),
+        // 优先使用后端落库后的真实 ID，反馈接口需要它；取不到时退回本地时间戳
+        id: messageId ?? Date.now(),
         conversation_id: currentConversation?.id || 0,
         role: 'assistant',
         content: streamingContent,
         sources,
+        feedback: null,
         created_at: new Date().toISOString(),
       };
       set({
@@ -207,7 +209,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             if (data.type === 'chunk') {
               get().appendStreamingContent(data.content);
             } else if (data.type === 'done') {
-              get().finishStreaming(data.sources);
+              get().finishStreaming(data.sources, data.message_id);
               // 更新会话列表，确保新会话也出现
               get().loadConversations();
             } else if (data.type === 'error') {

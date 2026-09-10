@@ -1,0 +1,190 @@
+{
+  "_comment": "CloudFlow 演示知识库的黄金测试集。expected_docs 为「应当被召回」的文档；refusal 类问题的 expected_docs 为空，考察系统是否会承认「不知道」。",
+  "_version": "1.0",
+  "cases": [
+    {
+      "id": "g01",
+      "query": "同步任务报 CONN_TIMEOUT 应该怎么排查？",
+      "expected_docs": ["04-故障排查手册.md"],
+      "type": "keyword",
+      "note": "错误码类：混合检索的目标场景"
+    },
+    {
+      "id": "g02",
+      "query": "CDC_BINLOG_DISABLED 是什么错误？怎么解决？",
+      "expected_docs": ["04-故障排查手册.md"],
+      "type": "keyword"
+    },
+    {
+      "id": "g03",
+      "query": "PERM_CDC_DENIED 报错怎么处理？",
+      "expected_docs": ["04-故障排查手册.md"],
+      "type": "keyword"
+    },
+    {
+      "id": "g04",
+      "query": "SYNC_OOM 报错说明什么？如何调优？",
+      "expected_docs": ["04-故障排查手册.md"],
+      "type": "keyword"
+    },
+    {
+      "id": "g05",
+      "query": "专业版每月包含多少同步行数额度？",
+      "expected_docs": ["06-套餐与计费说明.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g06",
+      "query": "超出行数额度后怎么计费？单价是多少？",
+      "expected_docs": ["06-套餐与计费说明.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g07",
+      "query": "从企业版降级到专业版会有什么影响？",
+      "expected_docs": ["06-套餐与计费说明.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g08",
+      "query": "服务不可用可以获得什么赔偿？",
+      "expected_docs": ["10-服务等级协议SLA.pdf"],
+      "type": "fact"
+    },
+    {
+      "id": "g09",
+      "query": "各套餐的可用性承诺分别是多少？",
+      "expected_docs": ["10-服务等级协议SLA.pdf", "06-套餐与计费说明.md"],
+      "type": "multihop"
+    },
+    {
+      "id": "g10",
+      "query": "怎么用 API 创建一个同步任务？",
+      "expected_docs": ["05-API参考文档.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g11",
+      "query": "Access Token 的有效期是多久？",
+      "expected_docs": ["05-API参考文档.md", "02-快速入门指南.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g12",
+      "query": "API 调用触发限流会返回什么状态码？",
+      "expected_docs": ["05-API参考文档.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g13",
+      "query": "你们支持 Kafka 作为数据源吗？需要什么套餐？",
+      "expected_docs": ["03-数据源连接器清单.csv"],
+      "type": "keyword"
+    },
+    {
+      "id": "g14",
+      "query": "支持哪些对象存储？",
+      "expected_docs": ["03-数据源连接器清单.csv"],
+      "type": "fact"
+    },
+    {
+      "id": "g15",
+      "query": "Oracle 支持 CDC 实时同步吗？",
+      "expected_docs": ["03-数据源连接器清单.csv", "01-产品概述与核心概念.md"],
+      "type": "multihop"
+    },
+    {
+      "id": "g16",
+      "query": "我的业务数据会被 CloudFlow 看到吗？",
+      "expected_docs": ["08-安全与合规白皮书.md", "09-客户常见问题FAQ.docx"],
+      "type": "fact"
+    },
+    {
+      "id": "g17",
+      "query": "你们通过了哪些安全合规认证？",
+      "expected_docs": ["08-安全与合规白皮书.md", "09-客户常见问题FAQ.docx"],
+      "type": "fact"
+    },
+    {
+      "id": "g18",
+      "query": "数据源密码是怎么存储的？",
+      "expected_docs": ["08-安全与合规白皮书.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g19",
+      "query": "2.4.0 版本更新了哪些内容？",
+      "expected_docs": ["07-版本更新日志.txt"],
+      "type": "keyword"
+    },
+    {
+      "id": "g20",
+      "query": "私有化部署是哪个套餐才支持？",
+      "expected_docs": ["01-产品概述与核心概念.md", "06-套餐与计费说明.md", "09-客户常见问题FAQ.docx"],
+      "type": "multihop"
+    },
+    {
+      "id": "g21",
+      "query": "CDC 实时同步需要满足什么前置条件？",
+      "expected_docs": ["01-产品概述与核心概念.md", "04-故障排查手册.md", "02-快速入门指南.md"],
+      "type": "multihop"
+    },
+    {
+      "id": "g22",
+      "query": "同步模式有哪几种？分别适用什么场景？",
+      "expected_docs": ["01-产品概述与核心概念.md"],
+      "type": "fact"
+    },
+    {
+      "id": "g23",
+      "query": "Upsert 写入策略要求源表有什么条件？",
+      "expected_docs": ["04-故障排查手册.md", "09-客户常见问题FAQ.docx", "01-产品概述与核心概念.md"],
+      "type": "multihop"
+    },
+    {
+      "id": "g24",
+      "query": "发票怎么开？有什么门槛？",
+      "expected_docs": ["06-套餐与计费说明.md", "09-客户常见问题FAQ.docx"],
+      "type": "fact"
+    },
+    {
+      "id": "g25",
+      "query": "控制面与数据面是怎么分离的？",
+      "expected_docs": ["01-产品概述与核心概念.md", "08-安全与合规白皮书.md"],
+      "type": "multihop"
+    },
+    {
+      "id": "r01",
+      "query": "CloudFlow 的 CEO 手机号是多少？",
+      "expected_docs": [],
+      "type": "refusal",
+      "note": "知识库无答案，考察拒答而非编造"
+    },
+    {
+      "id": "r02",
+      "query": "你们支持区块链数据源吗？",
+      "expected_docs": [],
+      "type": "refusal"
+    },
+    {
+      "id": "r03",
+      "query": "公司去年的营业收入是多少？",
+      "expected_docs": [],
+      "type": "refusal"
+    },
+    {
+      "id": "r04",
+      "query": "怎么用 Python SDK 连接 CloudFlow？",
+      "expected_docs": [],
+      "type": "refusal",
+      "note": "知识库只有 REST API 文档，没有 Python SDK 文档"
+    },
+    {
+      "id": "r05",
+      "query": "针对医疗健康行业的 HIPAA 合规怎么做？",
+      "expected_docs": [],
+      "type": "refusal",
+      "note": "白皮书中明确写了 HIPAA 不适用，属边缘情况"
+    }
+  ]
+}

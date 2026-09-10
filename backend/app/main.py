@@ -49,6 +49,33 @@ def _migrate_add_kb_id():
     logger.info("已为 documents 表补充 kb_id 列")
 
 
+def _migrate_add_feedback_columns():
+    """轻量迁移：为已存在的 messages 表补充用户反馈相关列。
+
+    与 kb_id 同理，create_all 不会修改既有表结构。
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "messages" not in inspector.get_table_names():
+        return
+    columns = {c["name"] for c in inspector.get_columns("messages")}
+
+    additions = {
+        "feedback": "ALTER TABLE messages ADD COLUMN feedback ENUM('up','down') NULL",
+        "feedback_reason": "ALTER TABLE messages ADD COLUMN feedback_reason VARCHAR(64) NULL",
+        "feedback_comment": "ALTER TABLE messages ADD COLUMN feedback_comment TEXT NULL",
+        "feedback_at": "ALTER TABLE messages ADD COLUMN feedback_at DATETIME NULL",
+        "retrieval_log_id": "ALTER TABLE messages ADD COLUMN retrieval_log_id INT NULL",
+    }
+    with engine.begin() as conn:
+        for col, ddl in additions.items():
+            if col in columns:
+                continue
+            conn.execute(text(ddl))
+            logger.info(f"已为 messages 表补充列: {col}")
+
+
 def _seed_default_kb(db):
     """确保至少存在一个默认知识库，并把历史遗留（kb_id 为空）的文档归入其中。"""
     from app.models.knowledge_base import KnowledgeBase
@@ -79,6 +106,7 @@ def _seed_default_kb(db):
 
 
 _migrate_add_kb_id()
+_migrate_add_feedback_columns()
 
 # 确保目录存在
 os.makedirs(UPLOAD_DIR, exist_ok=True)

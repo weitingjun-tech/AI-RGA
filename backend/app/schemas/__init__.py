@@ -45,6 +45,13 @@ class ChatRequest(BaseModel):
     kb_ids: Optional[list[int]] = None
 
 
+class FeedbackRequest(BaseModel):
+    """用户对某条回答的反馈"""
+    feedback: str = Field(..., pattern="^(up|down)$")      # up=有帮助 down=没帮助
+    reason: Optional[str] = Field(None, max_length=64)     # 不准确/不完整/过时/无关
+    comment: Optional[str] = Field(None, max_length=500)   # 补充说明
+
+
 class SourceCitation(BaseModel):
     doc_id: int
     doc_name: str
