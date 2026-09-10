@@ -41,6 +41,8 @@ class UserInfo(BaseModel):
 class ChatRequest(BaseModel):
     conversation_id: Optional[int] = None
     query: str = Field(..., min_length=1, max_length=2000)
+    # 指定检索的知识库 ID 列表；为空表示检索全部知识库
+    kb_ids: Optional[list[int]] = None
 
 
 class SourceCitation(BaseModel):
@@ -88,6 +90,7 @@ class DocumentResponse(BaseModel):
     chunk_count: int
     status: str
     uploaded_by: Optional[int]
+    kb_id: Optional[int] = None
     created_at: datetime
 
     class Config:
@@ -103,3 +106,33 @@ class DocumentProcessStatus(BaseModel):
     id: int
     status: str
     chunk_count: int
+
+
+# ========== Knowledge Base ==========
+class KnowledgeBaseCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = Field(None, max_length=512)
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = Field(None, max_length=512)
+
+
+class KnowledgeBaseResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    collection_name: str
+    is_default: Optional[str]
+    doc_count: int = 0
+    chunk_count: int = 0
+    created_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeBaseList(BaseModel):
+    bases: list[KnowledgeBaseResponse]
+    total: int

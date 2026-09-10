@@ -1,0 +1,370 @@
+[
+  {
+    "id": "q1",
+    "category": "故障排查（单文档检索）",
+    "note": "考察点：能否从故障手册中定位到正确的错误码并给出结构化排查步骤",
+    "query": "我的同步任务一直报 CONN_TIMEOUT，应该怎么排查？",
+    "answer": "根据您提供的报错信息，`CONN_TIMEOUT` 通常表示网络连接尝试超时。以下是排查 `CONN_TIMEOUT` 的步骤：\n\n1. **检查网络连通性**：\n   - 在数据面 Worker 所在机器上执行 `telnet 10.0.1.20 3306`，验证是否能成功连接到目标数据库的指定端口。如果 `telnet` 命令返回 `Connection refused`，则表示目标端口没有服务在监听。\n\n2. **确认安全组和防火墙设置**：\n   - 确认已放行 CloudFlow Worker 的出网 IP 段。您可以在 CloudFlow 控制台的「网络诊断」页面查看当前 IP 段。\n   - 检查目标数据库的安全组规则，确保已开放相应的出站规则。\n\n3. **检查数据库监听设置**：\n   - 确认目标数据库的 `bind-address` 设置为 `0.0.0.0`，以允许来自任何 IP 地址的连接。\n\n4. **检查连接数限制**：\n   - 使用 `SHOW STATUS LIKE 'Threads_connected';` 命令检查当前的连接数是否接近 `max_connections` 设置。\n\n根据知识库中的信息，`CONN_TIMEOUT` 的问题通常由网络不通或安全组/防火墙未放行引起，这两种情况占 `CONN_TIMEOUT` 的 **80% 以上**。\n\n如果以上步骤均未解决问题，请提交工单并附带运行实例 ID 与完整报错日志，以便进一步诊断。\n\n**提交工单时必须提供的信息**：\n- 运行实例 ID\n- 错误码\n- 完整报错堆栈\n- 问题发生时间\n\n希望以上信息对您有所帮助。如有其他问题，请随时联系技术支持。",
+    "sources": [
+      {
+        "doc_id": 21,
+        "doc_name": "02-快速入门指南.md",
+        "chunk_id": 4,
+        "text_snippet": "**Q：第一次全量同步很慢怎么办？**\nA：可在任务配置中调大 **并发度（parallelism）**，基础版上限为 2，专业版为 8，企业版及以上为 32。\n\n**Q：想要同一条链路既做历史回填又做日常增量，需要建两个任务吗？**\nA：不需要。先建立全量任务完成基线，再在同一任务上开启增量；也可使用 **Backfill（回填）** 功能指定历史时间段重跑。",
+        "score": 0.5957
+      },
+      {
+        "doc_id": 21,
+        "doc_name": "02-快速入门指南.md",
+        "chunk_id": 2,
+        "text_snippet": "---\n\n## 第 2 步：创建同步任务\n\n1. 点击 **「同步任务」→「新建任务」**\n2. **选择源**：从下拉框选择第 1 步创建的连接，再选择要同步的表\n3. **选择目标**：选择目标端连接与目标表\n4. **配置同步模式**：\n   - 初次同步建议选 **全量同步**，先建立基线数据\n   - 后续改为 **增量同步**，并指定增量字段（如 `updated_at`）\n5. **配置写入策略**：生产环境建议选 **Upsert**\n6. **设置调度周期**：Cron 表达式，例如 `0 */1 * * *` 表示每小时执行一次\n7. 点击 **「保存并试运行」**\n\n--...",
+        "score": 0.5678
+      },
+      {
+        "doc_id": 24,
+        "doc_name": "05-API参考文档.md",
+        "chunk_id": 5,
+        "text_snippet": "**响应**：\n\n```json\n{\n  \"run_id\": \"run_5d8e21b7\",\n  \"status\": \"SUCCESS\",\n  \"rows_synced\": 1284503,\n  \"duration_seconds\": 47,\n  \"started_at\": \"2026-08-15T10:25:00Z\",\n  \"finished_at\": \"2026-08-15T10:25:47Z\",\n  \"error_code\": null\n}\n```\n\n**status 取值**：`RUNNING` / `SUCCESS` / `FAILED` / `STALLED` / `CANCELL...",
+        "score": 0.5647
+      },
+      {
+        "doc_id": 23,
+        "doc_name": "04-故障排查手册.md",
+        "chunk_id": 1,
+        "text_snippet": "**可能原因与排查顺序**：\n\n1. **网络不通** —— 在数据面 Worker 所在机器执行 `telnet 10.0.1.20 3306` 验证连通性\n2. **安全组 / 防火墙未放行** —— 确认已放行 CloudFlow Worker 的出网 IP 段（控制台「网络诊断」页可查看当前 IP 段）\n3. **数据库未监听外网地址** —— 检查 MySQL 的 `bind-address` 是否为 `0.0.0.0`\n4. **连接数打满** —— 检查 `SHOW STATUS LIKE 'Threads_connected';` 是否接近 `max_connections`\n...",
+        "score": 0.5577
+      },
+      {
+        "doc_id": 23,
+        "doc_name": "04-故障排查手册.md",
+        "chunk_id": 7,
+        "text_snippet": "---\n\n## 八、通用排查流程\n\n```\n任务失败\n   │\n   ├─ 看错误码前缀\n   │\n   ├─ CONN_  → 查第二、三节（网络 → 权限）\n   ├─ PERM_  → 查第三节\n   ├─ SCHEMA_→ 查第四节\n   ├─ SYNC_  → 查第五节\n   ├─ QUOTA_ → 查第六节\n   └─ CDC_   → 查第七节\n         │\n         └─ 仍无法解决 → 提交工单（附带运行实例 ID 与完整报错日志）\n```\n\n**提交工单时必须提供**：运行实例 ID、错误码、完整报错堆栈、问题发生时间。缺少这些信息会显著延长处理时长。",
+        "score": 0.5559
+      }
+    ],
+    "elapsed_sec": 58.7,
+    "conversation_id": 37
+  },
+  {
+    "id": "q2",
+    "category": "计费政策（数值准确性）",
+    "note": "考察点：能否准确引用套餐额度与超额单价，不编造数字",
+    "query": "专业版每个月包含多少同步行数额度？如果超额了怎么收费？",
+    "answer": "根据知识库中的信息：\n\n### 专业版每个月包含的同步行数额度\n\n- **专业版**的月同步行数额度为 **5,000 万行**。[来源: 套餐与计费说明]\n\n### 超额计费\n\n- 如果月同步行数超出套餐额度（即超出 5,000 万行），超出部分将按 **0.02 元 / 万行** 计费。[来源: 套餐与计费说明]\n\n**示例计算**：\n假设专业版用户某月同步 6,000 万行，超出 1,000 万行，\n超额费用 = 1,000 万 ÷ 1 万 × 0.02 = **20 元**。\n\n如有其他疑问或需要进一步帮助，请随时告知。",
+    "sources": [
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 3,
+        "text_snippet": "## 2. 计费方式\n\n### 2.1 订阅制\n\n按 **月** 或 **年** 订阅。年付享 **8.5 折** 优惠。\n\n### 2.2 超额计费\n\n月同步行数超出套餐额度后，超出部分按 **0.02 元 / 万行** 计费。\n\n> **示例**：专业版用户某月同步 6,000 万行，超出 1,000 万行，\n> 超额费用 = 1,000 万 ÷ 1 万 × 0.02 = **20 元**。\n\n### 2.3 计费口径说明\n\n**计入同步行数的操作**：\n\n- 全量同步：按实际读取行数计\n- 增量同步：按实际读取行数计\n- CDC 实时同步：**按实际变更行数计**\n\n**不计入同步行数的...",
+        "score": 0.715
+      },
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 7,
+        "text_snippet": "## 6. 版本与套餐\n\n详见《套餐与计费说明》。速览：\n\n| 套餐 | 定位 | CDC 实时同步 | 私有化部署 |\n|------|------|--------------|------------|\n| 基础版 | 个人 / 试用 | ✗ | ✗ |\n| 专业版 | 中小团队 | ✗ | ✗ |\n| 企业版 | 中大型企业 | ✓ | ✗ |\n| 旗舰版 | 大型集团 | ✓ | ✓ |\n\n## 7. 术语速查\n\n- **CDC**：Change Data Capture，变更数据捕获\n- **DAG**：Directed Acyclic Graph，有向无环图，用于任务依赖编排\n-...",
+        "score": 0.5263
+      },
+      {
+        "doc_id": 23,
+        "doc_name": "04-故障排查手册.md",
+        "chunk_id": 5,
+        "text_snippet": "**含义**：任务运行中长时间无进度（默认超过 **30 分钟** 判定为停滞）。\n\n**解决**：\n1. 检查源库是否有长事务或锁表：`SHOW PROCESSLIST;`\n2. 检查目标端是否在写入时被其他任务加锁\n3. 若为偶发，直接 **重跑实例** 即可\n\n---\n\n## 六、QUOTA_ 配额类错误\n\n### QUOTA_TASK_LIMIT\n\n**含义**：同步任务数量已达当前套餐上限。\n\n**解决**：升级套餐，或停用不再使用的任务释放额度。各套餐任务上限见《套餐与计费说明》。\n\n### QUOTA_ROWS_LIMIT\n\n**含义**：本月同步行数已超出套餐额度。\n\n**解决...",
+        "score": 0.5246
+      },
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 5,
+        "text_snippet": "## 6. 常见计费问题\n\n**Q：任务失败也会计费吗？**\nA：失败但**未写入任何行数**的运行实例不计费；若失败前已写入部分行数，按实际写入行数计费。\n\n**Q：试用期结束后数据会保留吗？**\nA：会保留。试用期结束后账号自动转为**基础版**，超出基础版额度的任务会被暂停但配置保留，随时可升级恢复。\n\n**Q：可以只买某一个月吗？**\nA：可以，订阅制按月付费，随时可取消下月续订。\n\n**Q：企业版能否按月付？**\nA：企业版与旗舰版支持月付与年付；旗舰版因涉及私有化部署实施，通常按年签约。",
+        "score": 0.5207
+      },
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 1,
+        "text_snippet": "| 能力项 | 基础版 | 专业版 | 企业版 | 旗舰版 |\n|--------|--------|--------|--------|--------|\n| **价格（元/月）** | ¥0 | ¥1,999 | ¥7,999 | 定制报价 |\n| 同步任务数上限 | 5 | 50 | 500 | 不限 |\n| 成员数上限 | 3 | 20 | 100 | 不限 |\n| 月同步行数额度 | 100 万 | 5,000 万 | 5 亿 | 不限 |\n| 并发度上限 | 2 | 8 | 32 | 64 |\n| CDC 实时同步 | ✗ | ✗ | ✓ | ✓ |\n| 私有化部署 | ✗ | ✗...",
+        "score": 0.5201
+      }
+    ],
+    "elapsed_sec": 41.6,
+    "conversation_id": 38
+  },
+  {
+    "id": "q3",
+    "category": "跨文档综合（多跳推理）",
+    "note": "考察点：需要同时检索「连接器清单」「套餐说明」「产品概述」三份文档才能完整回答",
+    "query": "我要把 MySQL 的数据实时同步到 Snowflake，需要开通什么套餐？怎么配置？",
+    "answer": "根据提供的知识库信息，以下是关于将 MySQL 数据实时同步到 Snowflake 的相关信息：\n\n### 1. 套餐要求\n- **最低套餐**：专业版\n- **支持实时同步（CDC 实时同步）**：MySQL 需开启 binlog 且格式为 ROW\n- **Snowflake 支持**：仅目标，不支持增量同步和 CDC 实时同步\n\n因此，您需要开通 **专业版** 及以上套餐，并确保 MySQL 数据库已开启 binlog 且格式为 ROW。\n\n### 2. 配置步骤\n1. **进入控制台**，点击左侧导航 **「连接管理」→「新建连接」**。\n2. **选择数据源类型**：选择 **MySQL**。\n3. **填写连接信息**：\n   - 数据源名称\n   - 数据源类型：MySQL\n   - 主机地址\n   - 端口号\n   - 用户名\n   - 密码\n   - 需要开启 binlog 且格式为 ROW\n4. **新建目标连接**：\n   - 目标类型：Snowflake\n   - 填写目标连接信息，包括：\n     - 主机地址\n     - 端口号\n     - 用户名\n     - 密码\n     - 配置 Warehouse 与 Role\n5. **创建同步任务**：\n   - 选择 **CDC 实时同步** 模式\n   - 配置源端与目标端的表映射关系\n6. **启动同步任务**。\n\n### 注意事项\n- 确保源端数据库的网络放通了 CloudFlow 数据面 Worker 的访问。\n- 源端数据库账号具备 `SELECT` 权限；若使用 CDC，还需 `REPLICATION SLAVE` 与 `REPLICATION CLIENT` 权限。\n\n如需进一步的帮助或遇到问题，请提交工单或联系技术支持。",
+    "sources": [
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 2,
+        "text_snippet": "### 2.1 同步模式\n\nCloudFlow 支持三种同步模式，在创建同步任务时选择：\n\n| 模式 | 说明 | 适用场景 |\n|------|------|----------|\n| **全量同步（Full）** | 每次运行都完整读取源表所有数据 | 数据量小、初始化历史数据 |\n| **增量同步（Incremental）** | 基于时间戳或自增 ID 只读取新增/变化的数据 | 日常例行同步 |\n| **CDC 实时同步（Real-time）** | 解析数据库 binlog/redo log，实现秒级捕获 | 实时性要求高的场景，如订单、风控 |\n\n> **注意**：CDC 实时同...",
+        "score": 0.6806
+      },
+      {
+        "doc_id": 21,
+        "doc_name": "02-快速入门指南.md",
+        "chunk_id": 0,
+        "text_snippet": "# CloudFlow 快速入门指南\n\n> 文档版本：v2.4　|　适用套餐：全部　|　最后更新：2026-08-15\n\n本指南帮助你在 **30 分钟内**完成第一条数据同步链路。\n\n## 前置条件\n\n开始前请确认：\n\n1. 已完成 CloudFlow 账号注册并登录控制台\n2. 已开通至少 **基础版** 套餐（免费额度见《套餐与计费说明》）\n3. 源端数据库的网络放通了 CloudFlow 数据面 Worker 的访问（见《产品概述》第 5 节）\n4. 源端数据库账号具备 `SELECT` 权限；若使用 CDC，还需 `REPLICATION SLAVE` 与 `REPLICATION ...",
+        "score": 0.6804
+      },
+      {
+        "doc_id": 22,
+        "doc_name": "03-数据源连接器清单.csv",
+        "chunk_id": 5,
+        "text_snippet": "连接器名称: Snowflake\n英文标识: snowflake\n类别: 云数据仓库\n支持方向: 仅目标\n增量同步: 不支持\nCDC实时: 不支持\n最低套餐: 专业版\n说明: 需配置 Warehouse 与 Role",
+        "score": 0.6658
+      },
+      {
+        "doc_id": 22,
+        "doc_name": "03-数据源连接器清单.csv",
+        "chunk_id": 0,
+        "text_snippet": "连接器名称: MySQL\n英文标识: mysql\n类别: 关系型数据库\n支持方向: 源/目标\n增量同步: 支持\nCDC实时: 支持\n最低套餐: 基础版\n说明: CDC 需开启 binlog 且格式为 ROW",
+        "score": 0.6358
+      },
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 5,
+        "text_snippet": "│  数据面（Data Plane）— 运行在客户 VPC 内        │\n│  · 同步执行器（Worker）                        │\n│  · 数据不落盘到 CloudFlow 侧，保障安全          │\n└──────────────────────────────────────────────┘\n                    │\n                    ▼\n        客户数据仓库 / 数据湖\n```",
+        "score": 0.6279
+      }
+    ],
+    "elapsed_sec": 53.1,
+    "conversation_id": 39
+  },
+  {
+    "id": "q4",
+    "category": "API 文档（结构化信息）",
+    "note": "考察点：能否从 API 文档中提取必填字段并组织成可用的调用示例",
+    "query": "怎么用 API 创建一个同步任务？哪些字段是必填的？",
+    "answer": "根据提供的知识库信息，创建同步任务的 API 请求体中包含多个字段，其中一些字段是必填项。以下是创建同步任务的详细步骤和必填字段：\n\n### 1. 创建同步任务的 API 请求\n\n使用 `POST /v2/sync-tasks` 接口来创建同步任务。请求体中包含以下字段：\n\n```json\n{\n  \"name\": \"order-db-to-snowflake\",\n  \"source\": {\n    \"connection_id\": \"conn_8a2f\",\n    \"table\": \"orders\",\n    \"mode\": \"INCREMENTAL\",\n    \"incremental_column\": \"updated_at\"\n  },\n  \"destination\": {\n    \"connection_id\": \"conn_3b91\",\n    \"table\": \"orders_sync\",\n    \"write_strategy\": \"UPSERT\",\n    \"primary_key\": [\"order_id\"]\n  },\n  \"schedule\": \"0 */1 * * *\",\n  \"parallelism\": 8,\n  \"batch_size\": 5000\n}\n```\n\n### 2. 必填字段\n\n- **name**：任务名称，必填。\n- **source**：源端配置，必填。\n  - **connection_id**：源端连接ID，必填。\n  - **table**：源表名，必填。\n  - **mode**：同步模式，必填。可选值为 `INCREMENTAL`（增量同步）。\n  - **incremental_column**：增量字段，仅在 `INCREMENTAL` 模式下有效，可选。\n- **destination**：目标端配置，必填。\n  - **connection_id**：目标端连接ID，必填。\n  - **table**：目标表名，必填。\n  - **write_strategy**：写入策略，必填。可选值为 `UPSERT`。\n  - **primary_key**：主键字段，必填。\n- **schedule**：调度策略，可选。\n- **parallelism**：并发度，可选。\n- **batch_size**：批处理大小，可选。\n\n### 3. 示例请求\n\n```json\n{\n  \"name\": \"order-db-to-snowflake\",\n  \"source\": {\n    \"connection_id\": \"conn_8a2f\",\n    \"table\": \"orders\",\n    \"mode\": \"INCREMENTAL\",\n    \"incremental_column\": \"updated_at\"\n  },\n  \"destination\": {\n    \"connection_id\": \"conn_3b91\",\n    \"table\": \"orders_sync\",\n    \"write_strategy\": \"UPSERT\",\n    \"primary_key\": [\"order_id\"]\n  },\n  \"schedule\": \"0 */1 * * *\",\n  \"parallelism\": 8,\n  \"batch_size\": 5000\n}\n```\n\n### 4. 注意事项\n\n- 确保 `connection_id` 和 `table` 等字段的值正确无误。\n- `mode` 和 `incremental_column` 在 `INCREMENTAL` 模式下必须提供。\n- `write_strategy` 和 `primary_key` 在 `destination` 部分必须提供。\n- `schedule` 字段用于指定任务的执行时间，可根据需求调整。\n\n通过以上步骤和字段配置，您可以使用 API 创建一个同步任务。如有其他疑问或需要进一步的帮助，请随时联系技术支持。",
+    "sources": [
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 2,
+        "text_snippet": "### 2.1 同步模式\n\nCloudFlow 支持三种同步模式，在创建同步任务时选择：\n\n| 模式 | 说明 | 适用场景 |\n|------|------|----------|\n| **全量同步（Full）** | 每次运行都完整读取源表所有数据 | 数据量小、初始化历史数据 |\n| **增量同步（Incremental）** | 基于时间戳或自增 ID 只读取新增/变化的数据 | 日常例行同步 |\n| **CDC 实时同步（Real-time）** | 解析数据库 binlog/redo log，实现秒级捕获 | 实时性要求高的场景，如订单、风控 |\n\n> **注意**：CDC 实时同...",
+        "score": 0.6332
+      },
+      {
+        "doc_id": 24,
+        "doc_name": "05-API参考文档.md",
+        "chunk_id": 5,
+        "text_snippet": "**响应**：\n\n```json\n{\n  \"run_id\": \"run_5d8e21b7\",\n  \"status\": \"SUCCESS\",\n  \"rows_synced\": 1284503,\n  \"duration_seconds\": 47,\n  \"started_at\": \"2026-08-15T10:25:00Z\",\n  \"finished_at\": \"2026-08-15T10:25:47Z\",\n  \"error_code\": null\n}\n```\n\n**status 取值**：`RUNNING` / `SUCCESS` / `FAILED` / `STALLED` / `CANCELL...",
+        "score": 0.6319
+      },
+      {
+        "doc_id": 24,
+        "doc_name": "05-API参考文档.md",
+        "chunk_id": 2,
+        "text_snippet": "```\nPOST /v2/sync-tasks\n```\n\n**请求体**：\n\n```json\n{\n  \"name\": \"order-db-to-snowflake\",\n  \"source\": {\n    \"connection_id\": \"conn_8a2f\",\n    \"table\": \"orders\",\n    \"mode\": \"INCREMENTAL\",\n    \"incremental_column\": \"updated_at\"\n  },\n  \"destination\": {\n    \"connection_id\": \"conn_3b91\",\n    \"table\": \"orders_...",
+        "score": 0.614
+      },
+      {
+        "doc_id": 21,
+        "doc_name": "02-快速入门指南.md",
+        "chunk_id": 4,
+        "text_snippet": "**Q：第一次全量同步很慢怎么办？**\nA：可在任务配置中调大 **并发度（parallelism）**，基础版上限为 2，专业版为 8，企业版及以上为 32。\n\n**Q：想要同一条链路既做历史回填又做日常增量，需要建两个任务吗？**\nA：不需要。先建立全量任务完成基线，再在同一任务上开启增量；也可使用 **Backfill（回填）** 功能指定历史时间段重跑。",
+        "score": 0.6088
+      },
+      {
+        "doc_id": 24,
+        "doc_name": "05-API参考文档.md",
+        "chunk_id": 6,
+        "text_snippet": "```\nDELETE /v2/sync-tasks/{task_id}\n```\n\n删除任务不会删除目标端已同步的数据。\n\n---\n\n## 4. 连接管理接口\n\n### 4.1 创建连接\n\n```\nPOST /v2/connections\n```\n\n```json\n{\n  \"name\": \"prod-order-db\",\n  \"type\": \"mysql\",\n  \"host\": \"10.0.1.20\",\n  \"port\": 3306,\n  \"database\": \"order_db\",\n  \"username\": \"cloudflow_ro\",\n  \"password\": \"******\"\n}\n...",
+        "score": 0.5904
+      }
+    ],
+    "elapsed_sec": 89.3,
+    "conversation_id": 40
+  },
+  {
+    "id": "q5",
+    "category": "表格数据（CSV 解析）",
+    "note": "考察点：CSV 类表格数据能否被正确检索并回答",
+    "query": "你们支持 Kafka 作为数据源吗？支持的话需要什么套餐？",
+    "answer": "根据知识库中的信息，Kafka 连接器支持作为数据源使用，并且最低支持的企业版套餐即可。\n\n具体信息如下：\n\n1. **支持方向**：Kafka 连接器支持作为源（source）使用。\n2. **最低套餐**：企业版。\n\n因此，如果您希望使用 Kafka 作为数据源，可以选择企业版或更高版本的套餐。\n\n**参考文档：**\n[1] (来源: 03-数据源连接器清单.csv)",
+    "sources": [
+      {
+        "doc_id": 22,
+        "doc_name": "03-数据源连接器清单.csv",
+        "chunk_id": 10,
+        "text_snippet": "连接器名称: Kafka\n英文标识: kafka\n类别: 消息队列\n支持方向: 源/目标\n增量同步: 不支持\nCDC实时: 支持\n最低套餐: 企业版\n说明: 作为源时支持消费位点管理",
+        "score": 0.6442
+      },
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 6,
+        "text_snippet": "**关键点**：数据在客户的 VPC 内直接搬运，**不经过 CloudFlow 的控制面**，这是 CloudFlow 与多数同类产品在安全架构上的核心差异。\n\n## 4. 支持的数据源与目标端\n\n完整清单见《数据源连接器清单》。当前版本支持：\n\n- **关系型数据库**：MySQL、PostgreSQL、SQL Server、Oracle、ClickHouse、Snowflake\n- **SaaS 应用**：Salesforce、HubSpot、金蝶云、钉钉\n- **消息队列**：Kafka、RabbitMQ\n- **对象存储**：AWS S3、阿里云 OSS、MinIO\n- **文件**...",
+        "score": 0.5607
+      },
+      {
+        "doc_id": 28,
+        "doc_name": "09-客户常见问题FAQ.docx",
+        "chunk_id": 3,
+        "text_snippet": "Q：支持私有化部署吗？\n\nA：仅旗舰版支持将控制面完整部署到客户自有 Kubernetes 集群，可实现数据完全不出客户网络，并支持 Air-gapped 离线模式。\n\nQ：有哪些合规认证？\n\nA：已通过 ISO 27001、ISO 27701、SOC 2 Type II，符合 GDPR，并通过中国等保三级。SOC 2 报告可在签署 NDA 后通过客户经理索取。",
+        "score": 0.5478
+      },
+      {
+        "doc_id": 22,
+        "doc_name": "03-数据源连接器清单.csv",
+        "chunk_id": 1,
+        "text_snippet": "连接器名称: PostgreSQL\n英文标识: postgresql\n类别: 关系型数据库\n支持方向: 源/目标\n增量同步: 支持\nCDC实时: 支持\n最低套餐: 基础版\n说明: CDC 使用逻辑复制槽（logical replication slot）",
+        "score": 0.5373
+      },
+      {
+        "doc_id": 22,
+        "doc_name": "03-数据源连接器清单.csv",
+        "chunk_id": 11,
+        "text_snippet": "连接器名称: RabbitMQ\n英文标识: rabbitmq\n类别: 消息队列\n支持方向: 仅源\n增量同步: 不支持\nCDC实时: 不支持\n最低套餐: 专业版\n说明: 基于 AMQP 0-9-1 协议",
+        "score": 0.5323
+      }
+    ],
+    "elapsed_sec": 19.1,
+    "conversation_id": 41
+  },
+  {
+    "id": "q6",
+    "category": "安全合规（DOCX/PDF 内容）",
+    "note": "考察点：能否命中 DOCX 与安全白皮书中的内容",
+    "query": "我的业务数据会被 CloudFlow 看到吗？你们有哪些合规认证？",
+    "answer": "根据 CloudFlow 的安全设计，您的业务数据不会经过 CloudFlow 的控制面，也不会在 CloudFlow 侧落盘。具体来说：\n\n1. **控制面**（CloudFlow 托管）：仅存储任务配置、连接元数据、运行日志，不含业务数据。\n2. **数据面**（部署在客户 VPC 内）：实际执行数据搬运，数据在客户网络内直接由源端流向目标端。\n\n因此，即使 CloudFlow 控制面遭受攻击，攻击者也无法获取您的业务数据。\n\n关于合规认证，CloudFlow 当前持有以下认证与报告：\n\n1. **ISO/IEC 27001**：信息安全管理体系。\n2. **ISO/IEC 27701**：隐私信息管理。\n3. **SOC 2 Type II**：安全性、可用性、保密性。\n4. **GDPR**：已签署标准合同条款（SCC）。\n5. **等保三级**：中国网络安全等级保护。\n6. **HIPAA**：当前不适用，因为 CloudFlow 当前不支持医疗健康数据场景。\n\nSOC 2 Type II 报告可在签署 NDA 后，通过客户经理索取。",
+    "sources": [
+      {
+        "doc_id": 27,
+        "doc_name": "08-安全与合规白皮书.md",
+        "chunk_id": 3,
+        "text_snippet": "## 5. 合规认证\n\nCloudFlow 当前持有以下认证与报告：\n\n| 认证 / 报告 | 状态 | 说明 |\n|-------------|------|------|\n| **ISO/IEC 27001** | 已通过 | 信息安全管理体系 |\n| **ISO/IEC 27701** | 已通过 | 隐私信息管理 |\n| **SOC 2 Type II** | 已通过 | 安全性、可用性、保密性 |\n| **GDPR** | 符合 | 已签署标准合同条款（SCC） |\n| **等保三级** | 已通过 | 中国网络安全等级保护 |\n| **HIPAA** | 不适用 | 当前不支持医疗...",
+        "score": 0.7668
+      },
+      {
+        "doc_id": 27,
+        "doc_name": "08-安全与合规白皮书.md",
+        "chunk_id": 0,
+        "text_snippet": "# CloudFlow 安全与合规白皮书\n\n> 文档版本：v2.4　|　最后更新：2026-08-15\n>\n> 本白皮书面向客户的安全与合规团队，说明 CloudFlow 在数据安全、访问控制与合规认证方面的设计。\n\n## 1. 安全架构总览\n\nCloudFlow 采用 **控制面 / 数据面分离** 架构，这是保障客户数据安全的核心设计。\n\n**关键结论：客户的业务数据不会经过 CloudFlow 的控制面，也不会在 CloudFlow 侧落盘。**\n\n- **控制面**（CloudFlow 托管）：只存储任务配置、连接元数据、运行日志，**不含业务数据**\n- **数据面**（部署在客户 ...",
+        "score": 0.6893
+      },
+      {
+        "doc_id": 27,
+        "doc_name": "08-安全与合规白皮书.md",
+        "chunk_id": 2,
+        "text_snippet": "## 4. 访问控制\n\n### 4.1 认证\n\n- 支持 **账号密码 + TOTP 二次验证（2FA）**\n- 企业版及以上**强制要求**开启 2FA\n- 支持 **SSO 单点登录**：SAML 2.0、OIDC\n\n### 4.2 授权\n\n采用 **RBAC（基于角色的访问控制）**，预置角色：\n\n| 角色 | 权限范围 |\n|------|----------|\n| 所有者 Owner | 全部权限，含计费与成员管理 |\n| 管理员 Admin | 任务、连接、成员的完整管理 |\n| 开发者 Developer | 创建/修改任务与连接，不能管理成员 |\n| 只读 Viewer | 仅...",
+        "score": 0.6441
+      },
+      {
+        "doc_id": 27,
+        "doc_name": "08-安全与合规白皮书.md",
+        "chunk_id": 4,
+        "text_snippet": "针对 GDPR 要求的数据主体权利，CloudFlow 提供：\n\n- **访问权**：数据主体可请求导出其个人数据\n- **删除权**：支持「被遗忘权」请求，通过 API 触发源端/目标端数据清理\n- **数据可携权**：支持导出为 JSON / CSV\n- **处理限制**：支持对特定字段配置脱敏规则\n\n由于 CloudFlow 数据面运行在客户环境，**CloudFlow 本身不构成 GDPR 意义上的「数据控制者」**，而是「数据处理者」。\n\n## 7. 安全事件响应\n\n| 阶段 | 响应时限 |\n|------|----------|\n| 事件确认 | 1 小时内 |\n| 客户通知 |...",
+        "score": 0.6377
+      },
+      {
+        "doc_id": 29,
+        "doc_name": "10-服务等级协议SLA.pdf",
+        "chunk_id": 2,
+        "text_snippet": "CloudFlow 服务等级协议 (SLA)\n2. 申请需提供故障时间段、影响范围及相关日志截图\n3. CloudFlow 在收到申请后 10 个工作日内完成核实\n4. 核实通过后，赔偿券将在 5 个工作日内发放至客户账户\n超过 30 个自然日未提交申请的，视为客户放弃赔偿权利。\n6. 数据持久性与备份\n· 控制面元数据每日全量备份，保留 30 天，支持时间点恢复（PITR）\n· 备份数据跨可用区存储，加密方式为 AES-256\n· 数据面运行在客户环境，其数据持久性由客户自行负责\n· 客户可通过 API 随时导出任务配置与运行历史\n7. 协议变更\nCloudFlow  保留在提前  30  ...",
+        "score": 0.6375
+      }
+    ],
+    "elapsed_sec": 43.5,
+    "conversation_id": 42
+  },
+  {
+    "id": "q7",
+    "category": "边界测试（拒答能力）",
+    "note": "考察点：知识库中不存在的信息，模型是否诚实拒答而非编造 —— 幻觉控制能力",
+    "query": "你们 CEO 的手机号是多少？公司总部在哪个城市？",
+    "answer": "知识库中未收录 CEO 的手机号以及公司总部的具体城市信息。建议您通过官方渠道或提交工单与我们联系，我们将尽快为您提供所需信息。如有其他技术问题，我们也可以为您提供支持。",
+    "sources": [
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 2,
+        "text_snippet": "| 技术支持 | 社区 | 工单（24h 响应） | 工单（4h 响应） | 专属客户成功经理 |\n| SLA 保障 | ✗ | 99.5% | 99.9% | 99.95% |",
+        "score": 0.4939
+      },
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 1,
+        "text_snippet": "| 能力项 | 基础版 | 专业版 | 企业版 | 旗舰版 |\n|--------|--------|--------|--------|--------|\n| **价格（元/月）** | ¥0 | ¥1,999 | ¥7,999 | 定制报价 |\n| 同步任务数上限 | 5 | 50 | 500 | 不限 |\n| 成员数上限 | 3 | 20 | 100 | 不限 |\n| 月同步行数额度 | 100 万 | 5,000 万 | 5 亿 | 不限 |\n| 并发度上限 | 2 | 8 | 32 | 64 |\n| CDC 实时同步 | ✗ | ✗ | ✓ | ✓ |\n| 私有化部署 | ✗ | ✗...",
+        "score": 0.4228
+      },
+      {
+        "doc_id": 24,
+        "doc_name": "05-API参考文档.md",
+        "chunk_id": 3,
+        "text_snippet": "**字段说明**：\n\n| 字段 | 类型 | 必填 | 说明 |\n|------|------|------|------|\n| `name` | string | 是 | 任务名称，租户内唯一 |\n| `source.mode` | enum | 是 | `FULL` / `INCREMENTAL` / `CDC` |\n| `source.incremental_column` | string | 条件必填 | `INCREMENTAL` 模式必填 |\n| `destination.write_strategy` | enum | 是 | `APPEND` / `UPSERT` / `OV...",
+        "score": 0.4196
+      },
+      {
+        "doc_id": 21,
+        "doc_name": "02-快速入门指南.md",
+        "chunk_id": 1,
+        "text_snippet": "| 字段 | 示例值 | 说明 |\n   |------|--------|------|\n   | 连接名称 | `prod-order-db` | 建议包含环境与用途 |\n   | 主机地址 | `10.0.1.20` | 支持内网 IP 或域名 |\n   | 端口 | `3306` | MySQL 默认 3306 |\n   | 数据库 | `order_db` | |\n   | 用户名 | `cloudflow_ro` | 建议使用只读账号 |\n   | 密码 | `******` | 加密存储，创建后不可查看 |\n\n4. 点击 **「测试连接」**，出现绿色「连接成功」提示后点击 **...",
+        "score": 0.3957
+      },
+      {
+        "doc_id": 28,
+        "doc_name": "09-客户常见问题FAQ.docx",
+        "chunk_id": 3,
+        "text_snippet": "Q：支持私有化部署吗？\n\nA：仅旗舰版支持将控制面完整部署到客户自有 Kubernetes 集群，可实现数据完全不出客户网络，并支持 Air-gapped 离线模式。\n\nQ：有哪些合规认证？\n\nA：已通过 ISO 27001、ISO 27701、SOC 2 Type II，符合 GDPR，并通过中国等保三级。SOC 2 报告可在签署 NDA 后通过客户经理索取。",
+        "score": 0.3954
+      }
+    ],
+    "elapsed_sec": 9.9,
+    "conversation_id": 43
+  },
+  {
+    "id": "q8",
+    "category": "版本更新（TXT 日志）",
+    "note": "考察点：TXT 格式的更新日志能否被检索",
+    "query": "2.4.0 版本更新了哪些内容？",
+    "answer": "根据知识库中的信息，CloudFlow 2.4.0 版本更新了以下内容：\n\n1. CDC 实时同步支持 PostgreSQL 逻辑复制槽，此前仅支持 MySQL。\n2. 任务编排支持 DAG 依赖，可配置上下游任务的前后置关系。\n3. 控制台新增「网络诊断」页面，可一键检测 Worker 到数据源的连通性。\n4. 增量同步的水位线恢复逻辑优化，异常重试不再重复消费。\n5. 大批量写入性能提升约 40%（batch_size=5000 场景实测）。\n6. 修复了 Kafka 作为目标端时，消费位点偶发提交失败的问题。\n7. 修复了 Salesforce 连接器在 API 限流时的重试风暴。\n8. 基础版并发度上限由 1 调整为 2。\n\n[来源: 07-版本更新日志.txt]",
+    "sources": [
+      {
+        "doc_id": 25,
+        "doc_name": "06-套餐与计费说明.md",
+        "chunk_id": 0,
+        "text_snippet": "# CloudFlow 套餐与计费说明\n\n> 文档版本：v2.4　|　最后更新：2026-08-15\n\n## 1. 套餐对比",
+        "score": 0.4354
+      },
+      {
+        "doc_id": 20,
+        "doc_name": "01-产品概述与核心概念.md",
+        "chunk_id": 3,
+        "text_snippet": "### 2.2 写入策略\n\n写入目标端时可配置三种策略：\n\n- **Append（追加）**：直接追加，不处理主键冲突\n- **Upsert（更新插入）**：按主键更新已有记录，不存在则插入 —— **生产环境推荐**\n- **Overwrite（覆盖）**：写入前清空目标表分区，适合全量重跑的维表\n\n## 3. 系统架构\n\nCloudFlow 采用**控制面 / 数据面分离**的架构：",
+        "score": 0.4303
+      },
+      {
+        "doc_id": 27,
+        "doc_name": "08-安全与合规白皮书.md",
+        "chunk_id": 5,
+        "text_snippet": "## 8. 渗透测试与漏洞管理\n\n- 每年至少进行 **1 次**第三方渗透测试\n- 提供公开的 **漏洞赏金计划**（Bug Bounty）\n- 高危漏洞修复时限：**72 小时**内发布补丁\n\n## 9. 私有化部署的安全增强\n\n旗舰版支持将控制面完整部署到客户自有 Kubernetes 集群，此时：\n\n- 全部数据（含元数据）**完全不出客户网络**\n- 支持对接客户自有的 KMS 与 SSO\n- 可完全离线运行（Air-gapped 模式）",
+        "score": 0.4296
+      },
+      {
+        "doc_id": 28,
+        "doc_name": "09-客户常见问题FAQ.docx",
+        "chunk_id": 0,
+        "text_snippet": "CloudFlow 客户常见问题 FAQ\n\n文档版本：v2.4　|　适用套餐：全部　|　最后更新：2026-08-15\n\n本 FAQ 汇总了技术支持团队最常收到的客户问题，按主题分类。若你的问题未在此收录，请提交工单或查阅《故障排查手册》。\n\n账号与套餐\n\nQ：如何从基础版升级到企业版？\n\nA：在控制台「财务管理 → 套餐管理」点击升级，即时生效，按剩余天数比例补差价。升级后企业版专属能力（如 CDC 实时同步）可立即使用。\n\nQ：降级会有什么影响？\n\nA：降级在下一个计费周期生效，当前周期仍享受原套餐能力。需要特别注意：从企业版降至专业版后，所有正在运行的 CDC 实时同步任务会被自动暂停，...",
+        "score": 0.4295
+      },
+      {
+        "doc_id": 26,
+        "doc_name": "07-版本更新日志.txt",
+        "chunk_id": 0,
+        "text_snippet": "CloudFlow 版本更新日志 (Changelog)\n================================================================\n\nv2.4.0  (2026-08-15)\n----------------------------------------------------------------\n[新增] CDC 实时同步支持 PostgreSQL 逻辑复制槽，此前仅支持 MySQL\n[新增] 任务编排支持 DAG 依赖，可配置上下游任务的前后置关系\n[新增] 控制台新增「网络诊断」页面，可一键检测 Worker 到数据源的连通性...",
+        "score": 0.4254
+      }
+    ],
+    "elapsed_sec": 31.4,
+    "conversation_id": 44
+  }
+]

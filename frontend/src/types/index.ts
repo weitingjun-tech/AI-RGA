@@ -58,6 +58,19 @@ export interface Message {
 export interface ChatRequest {
   conversation_id?: number;
   query: string;
+  /** 指定检索的知识库 ID 列表；为空表示检索全部知识库 */
+  kb_ids?: number[];
+}
+
+export interface KnowledgeBase {
+  id: number;
+  name: string;
+  description?: string | null;
+  collection_name: string;
+  is_default?: string | null;
+  doc_count: number;
+  chunk_count: number;
+  created_at?: string;
 }
 
 export interface Document {
@@ -68,6 +81,7 @@ export interface Document {
   chunk_count: number;
   status: 'processing' | 'ready' | 'error';
   uploaded_by: number;
+  kb_id?: number | null;
   created_at: string;
 }
 

@@ -11,6 +11,7 @@ from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.knowledge_base import KnowledgeBase
 from app.schemas import (
     ChatRequest,
     ConversationResponse,
@@ -141,8 +142,12 @@ async def send_message(
     # 2. 保存用户消息
     save_message(db, conv.id, "user", data.query)
 
-    # 3. 检索知识库
-    context, sources = search_knowledge(data.query)
+    # 3. 检索知识库（可限定到指定知识库，实现多知识库隔离）
+    collection_names = None
+    if data.kb_ids:
+        kbs = db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(data.kb_ids)).all()
+        collection_names = [kb.collection_name for kb in kbs] or None
+    context, sources = search_knowledge(data.query, collection_names=collection_names)
 
     # 4. 获取历史（最近 10 轮对话）
     history = get_conversation_history(db, conv.id, limit=10)

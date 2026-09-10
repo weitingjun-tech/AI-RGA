@@ -1,6 +1,6 @@
 // RAG 知识库问答系统 - 问答主页面（现代企业级 UI）
 import { useEffect, useRef, useState } from 'react';
-import { Button } from 'antd';
+import { Button, Select, Tooltip } from 'antd';
 import {
   SendOutlined,
   PlusOutlined,
@@ -14,12 +14,14 @@ import { ChatMessage } from '../components/ChatMessage';
 import { UserMenu } from '../components/UserMenu';
 import { useNavigate } from 'react-router-dom';
 import { DatabaseOutlined } from '@ant-design/icons';
+import { knowledgeApi } from '../services/api';
+import type { KnowledgeBase } from '../types';
 
 
 const SUGGESTIONS = [
-  '有什么商品？',
-  '智能手表有什么特点？',
-  '保修政策是怎样的？',
+  '同步任务报 CONN_TIMEOUT 怎么排查？',
+  '专业版包含多少同步额度？超额怎么收费？',
+  'MySQL 实时同步到 Snowflake 需要什么套餐？',
 ];
 
 export default function Chat() {
@@ -29,12 +31,14 @@ export default function Chat() {
     loadConversations, selectConversation, createConversation,
     deleteConversation, renameConversation,
     sendMessage, loadOlder,
+    selectedKbIds, setSelectedKbIds,
   } = useChatStore();
 
   const { user, fetchUser } = useAuthStore();
   const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [siderCollapsed, setSiderCollapsed] = useState(false);
+  const [bases, setBases] = useState<KnowledgeBase[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const olderLoadingRef = useRef(false);
@@ -42,6 +46,10 @@ export default function Chat() {
   useEffect(() => {
     fetchUser();
     loadConversations();
+    // 加载知识库列表，供检索范围选择
+    knowledgeApi.getBases()
+      .then((res) => setBases(res.data.bases || []))
+      .catch(() => { /* 忽略：未登录或无权限时不展示选择器 */ });
   }, []);
 
   // 自动滚到底部
@@ -128,6 +136,23 @@ export default function Chat() {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {bases.length > 0 && (
+              <Tooltip title="限定检索范围：不选则检索全部知识库">
+                <Select
+                  mode="multiple"
+                  allowClear
+                  maxTagCount="responsive"
+                  style={{ minWidth: 220, maxWidth: 380 }}
+                  placeholder="检索范围：全部知识库"
+                  value={selectedKbIds}
+                  onChange={setSelectedKbIds}
+                  options={bases.map((b) => ({
+                    value: b.id,
+                    label: b.name,
+                  }))}
+                />
+              </Tooltip>
+            )}
             {user?.role === 'admin' && (
               <Button
                 icon={<DatabaseOutlined />}

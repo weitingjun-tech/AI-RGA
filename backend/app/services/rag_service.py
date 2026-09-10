@@ -4,8 +4,8 @@ import json
 from typing import AsyncGenerator, Optional
 
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -13,34 +13,40 @@ from app.config import (
     OLLAMA_MODEL,
     RETRIEVAL_TOP_K,
     RELEVANCE_THRESHOLD,
+    RAG_SYSTEM_PROMPT,
 )
-from app.services.kb_service import get_embedding_model, get_chroma_collection
+from app.services.kb_service import (
+    get_embedding_model,
+    get_chroma_collection,
+    get_collection,
+    get_chroma_client,
+)
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.utils.cache import query_cache
 
 
-# ==================== RAG System Prompt 模板 ====================
-RAG_SYSTEM_TEMPLATE = """你是一个专业的电商客服助手。你需要根据提供的商品知识库内容来回答用户问题。
-
-请遵守以下规则：
-1. 优先使用知识库中的信息回答问题，确保回答准确、详细、有帮助
-2. 在回答中引用知识库内容时，用 **[来源: 文档名]** 标注引用来源
-3. 如果知识库中没有相关信息，诚实告知用户，不要编造信息
-4. 回答要结构清晰，适当使用列表或分段
-5. 语气亲切专业，像真正的电商客服一样
-
-知识库参考内容：
-{context}"""
+# ==================== RAG System Prompt ====================
+# 模板定义在 app/config.py，可通过环境变量 RAG_SYSTEM_PROMPT 覆盖，以适配不同业务场景
+RAG_SYSTEM_TEMPLATE = RAG_SYSTEM_PROMPT
 
 
-def build_rag_messages(query: str, context: str, history: list[dict] | None = None) -> list[tuple[str, str]]:
-    """构建 RAG 对话消息列表（system + 可选历史 + 当前问题）"""
-    messages = [("system", RAG_SYSTEM_TEMPLATE.format(context=context))]
+def build_rag_messages(query: str, context: str, history: list[dict] | None = None) -> list:
+    """构建 RAG 对话消息列表（system + 可选历史 + 当前问题）。
+
+    注意：这里直接构造 Message 对象，**不经过 ChatPromptTemplate**。
+    原因：知识库原文中可能含有 {xxx} 形式的花括号（例如 API 文档里的 JSON 示例
+    {"task_id": "..."}）。若把拼好的文本再交给 ChatPromptTemplate 解析，
+    花括号会被误判为模板变量并抛出 INVALID_PROMPT_INPUT，导致检索到此类文档时
+    整个问答直接失败。直接构造消息对象可以从根本上避免二次模板解析。
+    """
+    messages: list = [SystemMessage(content=RAG_SYSTEM_TEMPLATE.format(context=context))]
     for msg in (history or []):
-        role = "human" if msg["role"] == "user" else "ai"
-        messages.append((role, msg["content"]))
-    messages.append(("human", query))
+        if msg["role"] == "user":
+            messages.append(HumanMessage(content=msg["content"]))
+        else:
+            messages.append(AIMessage(content=msg["content"]))
+    messages.append(HumanMessage(content=query))
     return messages
 
 
@@ -82,25 +88,75 @@ def get_llm() -> ChatOllama:
     )
 
 
-def retrieve(query: str, top_k: int = RETRIEVAL_TOP_K) -> dict:
-    """向量检索"""
-    embedding_model = get_embedding_model()
-    collection = get_chroma_collection()
+def list_collection_names() -> list[str]:
+    """列出 ChromaDB 中所有向量集合的名称（即全部知识库）"""
+    try:
+        return [c.name for c in get_chroma_client().list_collections()]
+    except Exception:
+        return []
 
+
+def retrieve(
+    query: str,
+    top_k: int = RETRIEVAL_TOP_K,
+    collection_names: Optional[list[str]] = None,
+) -> dict:
+    """向量检索。
+
+    Args:
+        collection_names: 要检索的知识库集合名列表。
+            - 传入具体集合名 → 只在该知识库内检索（实现知识库隔离）
+            - 传 None 或空列表 → 检索全部知识库，跨库结果按相似度合并排序
+    """
+    embedding_model = get_embedding_model()
     query_embedding = embedding_model.embed_query(query)
-    results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
-    return results
+
+    names = collection_names or list_collection_names()
+
+    merged_docs: list = []
+    merged_metas: list = []
+    merged_dists: list = []
+
+    for name in names:
+        try:
+            col = get_collection(name)
+            if col.count() == 0:
+                continue
+            res = col.query(query_embeddings=[query_embedding], n_results=top_k)
+        except Exception:
+            # 某个集合不可用不应影响整体检索
+            continue
+        merged_docs.extend(res.get("documents", [[]])[0])
+        merged_metas.extend(res.get("metadatas", [[]])[0])
+        merged_dists.extend(res.get("distances", [[]])[0])
+
+    # 跨库结果按距离升序合并（距离越小越相似），截断到 top_k
+    order = sorted(range(len(merged_dists)), key=lambda i: merged_dists[i])[:top_k]
+
+    return {
+        "documents": [[merged_docs[i] for i in order]],
+        "metadatas": [[merged_metas[i] for i in order]],
+        "distances": [[merged_dists[i] for i in order]],
+    }
 
 
 @query_cache
-def retrieve_cached(query: str, top_k: int = RETRIEVAL_TOP_K) -> dict:
-    """带缓存的向量检索"""
-    return retrieve(query, top_k)
+def retrieve_cached(
+    query: str,
+    top_k: int = RETRIEVAL_TOP_K,
+    collections: Optional[tuple] = None,
+) -> dict:
+    """带缓存的向量检索（collections 用元组以保证可哈希）"""
+    return retrieve(query, top_k, list(collections) if collections else None)
 
 
-def search_knowledge(query: str, top_k: int = RETRIEVAL_TOP_K) -> tuple[str, list[dict]]:
-    """检索知识库并构建上下文"""
-    results = retrieve_cached(query, top_k)
+def search_knowledge(
+    query: str,
+    top_k: int = RETRIEVAL_TOP_K,
+    collection_names: Optional[list[str]] = None,
+) -> tuple[str, list[dict]]:
+    """检索知识库并构建上下文（可指定知识库范围）"""
+    results = retrieve_cached(query, top_k, tuple(collection_names) if collection_names else None)
     return build_context_from_results(results)
 
 
@@ -110,9 +166,10 @@ async def generate_answer_stream(
 ) -> AsyncGenerator[str, None]:
     """流式生成回答（单轮，无历史）"""
     llm = get_llm()
-    chain = ChatPromptTemplate.from_messages(build_rag_messages(query, context)) | llm | StrOutputParser()
+    messages = build_rag_messages(query, context)
+    chain = llm | StrOutputParser()
 
-    async for chunk in chain.astream({}):
+    async for chunk in chain.astream(messages):
         yield chunk
 
 
@@ -123,9 +180,10 @@ async def generate_chat_stream(
 ) -> AsyncGenerator[str, None]:
     """带历史的多轮对话流式生成"""
     llm = get_llm()
-    chain = ChatPromptTemplate.from_messages(build_rag_messages(query, context, history)) | llm | StrOutputParser()
+    messages = build_rag_messages(query, context, history)
+    chain = llm | StrOutputParser()
 
-    async for chunk in chain.astream({}):
+    async for chunk in chain.astream(messages):
         yield chunk
 
 

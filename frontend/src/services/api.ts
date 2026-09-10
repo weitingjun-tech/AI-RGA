@@ -71,12 +71,25 @@ export const chatApi = {
 
 // ==================== 知识库 API ====================
 export const knowledgeApi = {
-  getDocuments: (page: number = 1) =>
-    api.get(`/api/knowledge/documents?page=${page}&page_size=20`),
+  // ---------- 知识库 ----------
+  getBases: () => api.get('/api/knowledge/bases'),
+  createBase: (name: string, description?: string) =>
+    api.post('/api/knowledge/bases', { name, description }),
+  updateBase: (id: number, data: { name?: string; description?: string }) =>
+    api.put(`/api/knowledge/bases/${id}`, data),
+  deleteBase: (id: number) => api.delete(`/api/knowledge/bases/${id}`),
+
+  // ---------- 文档 ----------
+  getDocuments: (page: number = 1, kbId?: number) =>
+    api.get(
+      `/api/knowledge/documents?page=${page}&page_size=20` +
+        (kbId ? `&kb_id=${kbId}` : ''),
+    ),
   getDocumentStatus: (id: number) => api.get(`/api/knowledge/documents/${id}`),
-  uploadDocument: (file: File) => {
+  uploadDocument: (file: File, kbId?: number) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (kbId) formData.append('kb_id', String(kbId));
     return api.post('/api/knowledge/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

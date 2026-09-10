@@ -2,6 +2,7 @@
 import os
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
@@ -10,11 +11,26 @@ from app.database import get_db, SessionLocal
 from app.middleware.auth import get_admin_user, get_current_user
 from app.models.user import User
 from app.models.document import Document
+from app.models.knowledge_base import KnowledgeBase
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.schemas import DocumentResponse, DocumentList, DocumentProcessStatus
-from app.services.kb_service import process_document, delete_document_from_chroma, reindex_document
-from app.config import UPLOAD_DIR, MAX_UPLOAD_SIZE, ALLOWED_EXTENSIONS
+from app.schemas import (
+    DocumentResponse,
+    DocumentList,
+    DocumentProcessStatus,
+    KnowledgeBaseCreate,
+    KnowledgeBaseUpdate,
+    KnowledgeBaseResponse,
+    KnowledgeBaseList,
+)
+from app.services.kb_service import (
+    process_document,
+    delete_document_from_chroma,
+    reindex_document,
+    drop_collection,
+    get_collection,
+)
+from app.config import UPLOAD_DIR, MAX_UPLOAD_SIZE, ALLOWED_EXTENSIONS, CHROMA_COLLECTION_NAME
 
 import logging
 logger = logging.getLogger("rag-app")
@@ -26,15 +42,18 @@ router = APIRouter(prefix="/api/knowledge", tags=["知识库管理"])
 def list_documents(
     page: int = 1,
     page_size: int = 20,
+    kb_id: Optional[int] = None,
     current_user: User = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ):
-    """获取知识库文档列表"""
+    """获取知识库文档列表（可通过 kb_id 只查看某个知识库）"""
     offset = (page - 1) * page_size
-    total = db.query(Document).count()
+    query = db.query(Document)
+    if kb_id is not None:
+        query = query.filter(Document.kb_id == kb_id)
+    total = query.count()
     docs = (
-        db.query(Document)
-        .order_by(Document.created_at.desc())
+        query.order_by(Document.created_at.desc())
         .offset(offset)
         .limit(page_size)
         .all()
@@ -58,10 +77,20 @@ def get_document_status(
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
+    kb_id: Optional[int] = Form(None),
     current_user: User = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ):
-    """上传文档"""
+    """上传文档（可指定归属的知识库 kb_id）"""
+    # 校验知识库存在
+    if kb_id is not None:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"知识库不存在: id={kb_id}",
+            )
+
     # 校验扩展名
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -94,6 +123,7 @@ async def upload_document(
         file_size=len(contents),
         status="processing",
         uploaded_by=current_user.id,
+        kb_id=kb_id,
     )
     db.add(doc)
     db.commit()
@@ -134,8 +164,8 @@ def delete_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
 
-    # 删除向量数据
-    delete_document_from_chroma(doc_id)
+    # 删除向量数据（从该文档所属知识库的集合中删除）
+    delete_document_from_chroma(db, doc_id)
 
     # 删除文件
     file_path = os.path.join(UPLOAD_DIR, doc.filename)
@@ -250,3 +280,132 @@ def delete_user(
     db.delete(user)
     db.commit()
     return {"message": f"用户 {user.username} 已删除"}
+
+# ==================== 知识库（Knowledge Base）管理 ====================
+
+def _build_collection_name(name: str) -> str:
+    """根据知识库名称生成全局唯一且合法的 ChromaDB 集合名。
+
+    ChromaDB 要求：3~63 字符，仅含字母/数字/下划线/连字符，首尾为字母或数字。
+    """
+    import re
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()[:30] or "kb"
+    return f"kb_{uuid.uuid4().hex[:8]}_{slug}"
+
+
+def _kb_to_response(db: Session, kb: KnowledgeBase) -> KnowledgeBaseResponse:
+    """组装知识库响应，附带文档数与分块数统计"""
+    docs = db.query(Document).filter(Document.kb_id == kb.id).all()
+    return KnowledgeBaseResponse(
+        id=kb.id,
+        name=kb.name,
+        description=kb.description,
+        collection_name=kb.collection_name,
+        is_default=kb.is_default,
+        doc_count=len(docs),
+        chunk_count=sum(d.chunk_count or 0 for d in docs),
+        created_at=kb.created_at,
+    )
+
+
+@router.get("/bases", response_model=KnowledgeBaseList)
+def list_knowledge_bases(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """列出全部知识库（含文档数与分块数）。
+
+    对所有已登录用户开放：问答时需要知道有哪些知识库可选。
+    创建/修改/删除仍限管理员。
+    """
+    bases = db.query(KnowledgeBase).order_by(KnowledgeBase.id.asc()).all()
+    return KnowledgeBaseList(
+        bases=[_kb_to_response(db, kb) for kb in bases],
+        total=len(bases),
+    )
+
+
+@router.post("/bases", response_model=KnowledgeBaseResponse, status_code=status.HTTP_201_CREATED)
+def create_knowledge_base(
+    data: KnowledgeBaseCreate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """创建知识库（同时创建对应的独立向量集合）"""
+    if db.query(KnowledgeBase).filter(KnowledgeBase.name == data.name).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"知识库名称已存在: {data.name}",
+        )
+
+    kb = KnowledgeBase(
+        name=data.name,
+        description=data.description,
+        collection_name=_build_collection_name(data.name),
+        created_by=current_user.id,
+        is_default="false",
+    )
+    db.add(kb)
+    db.commit()
+    db.refresh(kb)
+
+    # 预创建集合，确保立即可用
+    get_collection(kb.collection_name)
+
+    return _kb_to_response(db, kb)
+
+
+@router.put("/bases/{kb_id}", response_model=KnowledgeBaseResponse)
+def update_knowledge_base(
+    kb_id: int,
+    data: KnowledgeBaseUpdate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """更新知识库名称或描述"""
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+
+    if data.name and data.name != kb.name:
+        exists = db.query(KnowledgeBase).filter(KnowledgeBase.name == data.name).first()
+        if exists:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"知识库名称已存在: {data.name}",
+            )
+        kb.name = data.name
+    if data.description is not None:
+        kb.description = data.description
+
+    db.commit()
+    db.refresh(kb)
+    return _kb_to_response(db, kb)
+
+
+@router.delete("/bases/{kb_id}")
+def delete_knowledge_base(
+    kb_id: int,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """删除知识库：连同其下所有文档、向量集合一并删除"""
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+
+    docs = db.query(Document).filter(Document.kb_id == kb_id).all()
+    if docs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"该知识库下还有 {len(docs)} 个文档，请先删除文档或将其移出知识库",
+        )
+
+    collection_name = kb.collection_name
+    db.delete(kb)
+    db.commit()
+
+    # 删除对应的向量集合
+    drop_collection(collection_name)
+
+    return {"message": f"知识库「{kb.name}」已删除"}

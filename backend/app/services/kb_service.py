@@ -37,6 +37,7 @@ from app.config import (
     UPLOAD_DIR,
 )
 from app.models.document import Document
+from app.models.knowledge_base import KnowledgeBase
 
 
 # ==================== Embedding 模型（单例懒加载） ====================
@@ -58,23 +59,48 @@ def get_embedding_model() -> HuggingFaceBgeEmbeddings:
 
 # ==================== ChromaDB 客户端（单例懒加载） ====================
 _chroma_client: Optional[chromadb.PersistentClient] = None
-_collection: Optional[chromadb.Collection] = None
+# 集合缓存：一个知识库对应一个集合，按名称缓存避免重复获取
+_collections: dict[str, chromadb.Collection] = {}
 
 
-def get_chroma_collection() -> chromadb.Collection:
-    global _chroma_client, _collection
+def get_chroma_client() -> chromadb.PersistentClient:
+    """获取全局唯一的 ChromaDB 持久化客户端"""
+    global _chroma_client
     if _chroma_client is None:
         os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
         _chroma_client = chromadb.PersistentClient(
             path=CHROMA_PERSIST_DIR,
             settings=ChromaSettings(anonymized_telemetry=False),
         )
-    if _collection is None:
-        _collection = _chroma_client.get_or_create_collection(
-            name=CHROMA_COLLECTION_NAME,
+    return _chroma_client
+
+
+def get_collection(collection_name: str) -> chromadb.Collection:
+    """按名称获取（或创建）向量集合。
+
+    多知识库隔离的核心：每个知识库拥有独立的 collection，
+    检索时只查询目标知识库，从根本上避免跨库语料污染。
+    """
+    if collection_name not in _collections:
+        _collections[collection_name] = get_chroma_client().get_or_create_collection(
+            name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-    return _collection
+    return _collections[collection_name]
+
+
+def get_chroma_collection() -> chromadb.Collection:
+    """兼容旧调用：返回默认知识库对应的集合"""
+    return get_collection(CHROMA_COLLECTION_NAME)
+
+
+def drop_collection(collection_name: str) -> None:
+    """删除整个集合（删除知识库时调用）"""
+    try:
+        get_chroma_client().delete_collection(collection_name)
+    except Exception:
+        pass
+    _collections.pop(collection_name, None)
 
 
 # ==================== EPUB/MOBI 文本提取 ====================
@@ -156,6 +182,14 @@ def get_text_splitter() -> RecursiveCharacterTextSplitter:
     )
 
 
+def resolve_collection_name(db: Session, kb_id: Optional[int]) -> str:
+    """根据知识库 ID 解析对应的 ChromaDB 集合名；未指定时回退到默认集合"""
+    if kb_id is None:
+        return CHROMA_COLLECTION_NAME
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    return kb.collection_name if kb else CHROMA_COLLECTION_NAME
+
+
 def process_document(db: Session, doc_id: int, file_path: str, filename: str) -> None:
     """处理上传的文档：解析 → 分块 → 向量化 → 存入 ChromaDB"""
     doc = db.query(Document).filter(Document.id == doc_id).first()
@@ -187,9 +221,9 @@ def process_document(db: Session, doc_id: int, file_path: str, filename: str) ->
         splitter = get_text_splitter()
         chunks = splitter.split_documents(docs)
 
-        # 4. 向量化 + 入库
+        # 4. 向量化 + 入库（写入该文档所属知识库对应的独立集合）
         embedding_model = get_embedding_model()
-        collection = get_chroma_collection()
+        collection = get_collection(resolve_collection_name(db, doc.kb_id))
 
         texts = [chunk.page_content for chunk in chunks]
         ids = [f"doc_{doc_id}_chunk_{i}" for i in range(len(texts))]
@@ -223,9 +257,10 @@ def process_document(db: Session, doc_id: int, file_path: str, filename: str) ->
         raise e
 
 
-def delete_document_from_chroma(doc_id: int) -> None:
-    """从 ChromaDB 删除指定文档的所有分块"""
-    collection = get_chroma_collection()
+def delete_document_from_chroma(db: Session, doc_id: int) -> None:
+    """从文档所属知识库的集合中删除该文档的所有分块"""
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    collection = get_collection(resolve_collection_name(db, doc.kb_id if doc else None))
     try:
         # 按 metadata 过滤删除
         results = collection.get(where={"doc_id": doc_id})
@@ -256,7 +291,7 @@ def reindex_document(db: Session, doc_id: int) -> None:
         return
 
     # 先删旧向量
-    delete_document_from_chroma(doc_id)
+    delete_document_from_chroma(db, doc_id)
     doc.chunk_count = 0
     doc.status = "processing"
     db.commit()

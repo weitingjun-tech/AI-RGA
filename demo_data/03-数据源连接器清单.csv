@@ -1,0 +1,19 @@
+连接器名称,英文标识,类别,支持方向,增量同步,CDC实时,最低套餐,说明
+MySQL,mysql,关系型数据库,源/目标,支持,支持,基础版,CDC 需开启 binlog 且格式为 ROW
+PostgreSQL,postgresql,关系型数据库,源/目标,支持,支持,基础版,CDC 使用逻辑复制槽（logical replication slot）
+SQL Server,sqlserver,关系型数据库,源/目标,支持,支持,专业版,CDC 依赖 SQL Server Agent 服务
+Oracle,oracle,关系型数据库,源/目标,支持,不支持,专业版,需授予 SELECT ANY TABLE 权限
+ClickHouse,clickhouse,分析型数据库,仅目标,不支持,不支持,基础版,作为目标端批量写入性能优异
+Snowflake,snowflake,云数据仓库,仅目标,不支持,不支持,专业版,需配置 Warehouse 与 Role
+Salesforce,salesforce,CRM,源/目标,支持,支持,企业版,CDC 依赖 Streaming API 配额
+HubSpot,hubspot,营销自动化,仅源,支持,不支持,专业版,受 API 速率限制 100 次/10 秒
+金蝶云,kingdee,ERP,仅源,支持,不支持,企业版,支持金蝶云星空与云星辰
+钉钉,dingtalk,协同办公,仅源,支持,不支持,专业版,通讯录与审批数据
+Kafka,kafka,消息队列,源/目标,不支持,支持,企业版,作为源时支持消费位点管理
+RabbitMQ,rabbitmq,消息队列,仅源,不支持,不支持,专业版,基于 AMQP 0-9-1 协议
+AWS S3,s3,对象存储,源/目标,支持,不支持,基础版,支持 Parquet 与 CSV 格式
+阿里云 OSS,oss,对象存储,源/目标,支持,不支持,基础版,支持 Parquet 与 CSV 格式
+MinIO,minio,对象存储,源/目标,支持,不支持,基础版,兼容 S3 协议
+CSV 文件,csv,文件,仅源,不支持,不支持,基础版,需指定分隔符与字符编码
+JSON 文件,json,文件,仅源,不支持,不支持,基础版,支持嵌套结构的扁平化
+Parquet 文件,parquet,文件,仅目标,不支持,不支持,基础版,列式存储，压缩率高

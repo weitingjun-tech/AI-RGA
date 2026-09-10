@@ -11,4 +11,5 @@ class Document(Base):
     chunk_count = Column(Integer, default=0)
     status = Column(Enum("processing", "ready", "error", name="doc_status"), default="processing", nullable=False)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    kb_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=True, index=True)  # 所属知识库
     created_at = Column(DateTime, server_default=func.now())

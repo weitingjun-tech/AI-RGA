@@ -12,6 +12,9 @@ interface ChatState {
   // 消息分页状态
   page: number;
   hasMore: boolean;
+  // 检索范围：选中的知识库 ID（空数组 = 检索全部知识库）
+  selectedKbIds: number[];
+  setSelectedKbIds: (ids: number[]) => void;
 
   loadConversations: () => Promise<void>;
   selectConversation: (conv: Conversation) => Promise<void>;
@@ -38,6 +41,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingContent: '',
   page: 1,
   hasMore: false,
+  selectedKbIds: [],
+
+  setSelectedKbIds: (ids) => set({ selectedKbIds: ids }),
 
   loadConversations: async () => {
     try {
@@ -143,7 +149,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearStreamingContent: () => set({ streamingContent: '', streaming: false }),
 
   sendMessage: async (query) => {
-    const { currentConversation, messages } = get();
+    const { currentConversation, messages, selectedKbIds } = get();
     if (!query.trim()) return;
 
     // 构建完整的 SSE URL
@@ -153,6 +159,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const body = JSON.stringify({
       conversation_id: currentConversation?.id || undefined,
       query,
+      // 限定检索范围到选中的知识库；为空则由后端检索全部知识库
+      kb_ids: selectedKbIds.length ? selectedKbIds : undefined,
     });
 
     // 添加用户消息
