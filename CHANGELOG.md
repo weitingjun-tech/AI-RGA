@@ -36,8 +36,24 @@
   上传返回 `queue_mode=celery`，状态流转 `queued → processing → ready`，
   worker 日志与 Redis 中的 `celery-task-meta-*` 键均确认任务确实经过 broker
 
+### 🐛 修复
+
+**1. `.bat` 脚本用 UTF-8 保存导致中文 Windows 下无法运行**
+- **现象**：运行 `enable-wsl.bat` 报
+  `'噯澶囧ソ鏃舵妸鏈哄櫒閲嶅惎鎺夈€?' 不是内部或外部命令`，
+  随后一连串「系统找不到指定的路径」
+- **根因**：cmd.exe 按**系统 ANSI 代码页**读取 `.bat` 文件，中文 Windows 下是 GBK。
+  文件存成 UTF-8 后中文被解码成乱码，**乱码又破坏了批处理的语法结构**，
+  于是 `REM` 注释和 `for` 循环被当成命令去执行
+- **影响**：三个 `.bat`（start-redis / start-celery / enable-wsl）**全部无法运行**
+- **修复**：改用 GBK 编码 + CRLF 换行写入
+- **同类问题**：`alembic.ini` 早前也因同样的原因失败过
+  （Python 用 locale 编码读取配置文件，中文注释导致 UnicodeDecodeError）。
+  **教训：配置文件与批处理脚本一律避开非 ASCII，或必须按目标编码写入**
+
 ### 🏗️ 工程
 - 新增 `scripts/start-redis.bat`、`scripts/start-celery.bat`（含 Redis 可达性预检）
+- 新增 `scripts/enable-wsl.bat`：启用 WSL2 所需功能，含管理员权限自检
 - 新增 `DOCKER_SETUP.md`：Docker 部署准备清单，标注每步「谁执行」与预期问题
 - `/run` skill 更新为**四进程架构**（Redis → Celery worker → 后端 → 前端）：
   - 新增 Redis / worker 的启动与验证步骤

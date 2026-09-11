@@ -1,28 +1,30 @@
 @echo off
-REM å¯åŠ¨ Celery workerï¼ˆæ–‡æ¡£å¤„ç†åŽå°ä»»åŠ¡ï¼‰
+REM Æô¶¯ Celery worker£¨ÎÄµµ½âÎöÓëÏòÁ¿»¯µÄºóÌ¨ÈÎÎñ£©
 REM
-REM æ³¨æ„ --pool=soloï¼š
-REM   Celery é»˜è®¤ç”¨ prefork è¿›ç¨‹æ± ï¼Œåœ¨ Windows ä¸Šä¸Ž asyncio äº‹ä»¶å¾ªçŽ¯å†²çªä¼šç›´æŽ¥æŠ¥é”™ã€‚
-REM   --pool=solo è¡¨ç¤ºå•è¿›ç¨‹ä¸²è¡Œæ‰§è¡Œï¼Œæ˜¯ Windows ä¸‹çš„å”¯ä¸€å¯ç”¨é€‰é¡¹ã€‚
-REM   Linux/macOS ä¸éœ€è¦è¿™ä¸ªå‚æ•°ï¼Œå¯ä»¥æ¢æˆ --concurrency=N åšå¹¶å‘ã€‚
+REM ×¢Òâ --pool=solo£º
+REM   Celery Ä¬ÈÏÓÃ prefork ½ø³Ì³Ø£¬ÔÚ Windows ÉÏÓë asyncio ÊÂ¼þÑ­»·³åÍ»»áÖ±½Ó±¨´í¡£
+REM   --pool=solo ±íÊ¾µ¥½ø³Ì´®ÐÐÖ´ÐÐ£¬ÊÇ Windows ÏÂµÄÎ¨Ò»¿ÉÓÃÑ¡Ïî¡£
+REM   Linux/macOS ²»ÐèÒªÕâ¸ö²ÎÊý£¬¿ÉÒÔ»»³É --concurrency=N ×ö²¢·¢¡£
+REM
+REM ¡¾ÖØÒª¡¿±¾ÎÄ¼þ±ØÐë±£´æÎª GBK ±àÂë£¬Ô­Òò¼û enable-wsl.bat ¶¥²¿ËµÃ÷¡£
 
 cd /d "%~dp0..\backend"
 
 echo ============================================
-echo  å¯åŠ¨ Celery worker
-echo  ä»»åŠ¡: documents.processï¼ˆæ–‡æ¡£è§£æž + å‘é‡åŒ–ï¼‰
-echo  å…³é—­æœ¬çª—å£å³åœæ­¢ worker
+echo  Æô¶¯ Celery worker
+echo  ÈÎÎñ: documents.process ^(ÎÄµµ½âÎö + ÏòÁ¿»¯^)
+echo  ¹Ø±Õ±¾´°¿Ú¼´Í£Ö¹ worker
 echo ============================================
 echo.
 
-REM å…ˆç¡®è®¤ Redis æ˜¯å¦å¯è¾¾ï¼Œé¿å… worker èµ·æ¥åŽè¿žä¸ä¸Š broker ç™½ç™½ç©ºè½¬
+REM ÏÈÈ·ÈÏ Redis ¿É´ï£¬±ÜÃâ worker ÆðÀ´ºóÁ¬²»ÉÏ broker °×°×¿Õ×ª
 venv\Scripts\python.exe -c "import redis; redis.Redis.from_url('redis://localhost:6379/0', socket_connect_timeout=2).ping()" 2>nul
 if errorlevel 1 (
-    echo [è­¦å‘Š] è¿žä¸ä¸Š Redis ^(localhost:6379^)
-    echo        è¯·å…ˆè¿è¡Œ scripts\start-redis.bat
+    echo [¾¯¸æ] Á¬²»ÉÏ Redis ^(localhost:6379^)
+    echo        ÇëÏÈÔËÐÐ scripts\start-redis.bat
     echo.
-    echo        ç»§ç»­å¯åŠ¨çš„è¯ï¼Œæ–‡æ¡£å¤„ç†ä¼šé™çº§ä¸ºæœ¬åœ°çº¿ç¨‹æ¨¡å¼ï¼Œ
-    echo        è¿›ç¨‹é‡å¯ä¼šä¸¢å¤±æœªå®Œæˆçš„ä»»åŠ¡ã€‚
+    echo        ¼ÌÐøÆô¶¯µÄ»°£¬ÎÄµµ´¦Àí»á½µ¼¶Îª±¾µØÏß³ÌÄ£Ê½£¬
+    echo        ½ø³ÌÖØÆô»á¶ªÊ§Î´Íê³ÉµÄÈÎÎñ¡£
     echo.
     pause
 )

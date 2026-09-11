@@ -1,49 +1,54 @@
 @echo off
-REM å¯ç”¨ WSL2 æ‰€éœ€çš„ Windows åŠŸèƒ½
+REM ÆôÓÃ WSL2 ËùÐèµÄ Windows ¹¦ÄÜ
 REM
-REM ä½¿ç”¨æ–¹å¼ï¼šå³é”® â†’ ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œï¼ˆæˆ–ç”±ææƒè¿›ç¨‹è°ƒç”¨ï¼‰
-REM æœ¬è„šæœ¬**ä¸ä¼šè‡ªåŠ¨é‡å¯**ï¼Œé‡å¯æ—¶æœºç”±ä½ è‡ªå·±å†³å®šã€‚
+REM ÓÃ·¨£ºÓÒ¼ü±¾ÎÄ¼þ -> ÒÔ¹ÜÀíÔ±Éí·ÝÔËÐÐ
+REM ±¾½Å±¾²»»á×Ô¶¯ÖØÆô£¬ÖØÆôÊ±»úÓÉÄã×Ô¼º¾ö¶¨¡£
 REM
-REM ä¸ºä»€ä¹ˆç”¨ dism è€Œä¸æ˜¯ wsl --installï¼š
-REM   wsl --install æ˜¯ä¸ªé»‘ç›’ï¼Œå®ƒè‡ªè¡Œå†³å®šè£…ä»€ä¹ˆã€è¦ä¸è¦é‡å¯ï¼ŒæŠ¥é”™ä¹Ÿä¸æ˜Žç¡®ã€‚
-REM   dism ç›´æŽ¥å¯æŽ§ï¼Œ/norestart ä¿è¯ä¸ä¼šåœ¨æˆ‘ä»¬æ²¡å‡†å¤‡å¥½æ—¶æŠŠæœºå™¨é‡å¯æŽ‰ã€‚
+REM ÎªÊ²Ã´ÓÃ dism ¶ø²»ÊÇ wsl --install£º
+REM   wsl --install ÊÇ¸öºÚºÐ£¬Ëü×ÔÐÐ¾ö¶¨×°Ê²Ã´¡¢Òª²»ÒªÖØÆô£¬±¨´íÒ²²»Ã÷È·¡£
+REM   dism Ö±½Ó¿É¿Ø£¬/norestart ±£Ö¤²»»áÔÚÎÒÃÇÃ»×¼±¸ºÃÊ±°Ñ»úÆ÷ÖØÆôµô¡£
+REM
+REM ¡¾ÖØÒª¡¿±¾ÎÄ¼þ±ØÐë±£´æÎª GBK ±àÂë¡£
+REM   cmd.exe °´ÏµÍ³ ANSI ´úÂëÒ³¶ÁÈ¡ .bat£¬ÖÐÎÄ Windows ÏÂÊÇ GBK¡£
+REM   Èô´æ³É UTF-8£¬ÖÐÎÄ»á±»½âÂë³ÉÂÒÂë£¬½ø¶øÆÆ»µÅú´¦ÀíÓï·¨½á¹¹¡£
 
 set LOG=D:\mydo\wsl-enable.log
 
-echo === å¼€å§‹ %DATE% %TIME% === > "%LOG%"
+echo === ¿ªÊ¼ %DATE% %TIME% === > "%LOG%"
 
-REM ç¡®è®¤ç®¡ç†å‘˜æƒé™ï¼šnet session éœ€è¦ç®¡ç†å‘˜æ‰èƒ½æˆåŠŸ
+REM È·ÈÏ¹ÜÀíÔ±È¨ÏÞ£ºnet session ÐèÒª¹ÜÀíÔ±²ÅÄÜ³É¹¦
 net session >nul 2>&1
 if errorlevel 1 (
-    echo é”™è¯¯ï¼šæœªä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œï¼Œæ— æ³•å¯ç”¨ç³»ç»ŸåŠŸèƒ½ã€‚ >> "%LOG%"
+    echo ´íÎó£ºÎ´ÒÔ¹ÜÀíÔ±Éí·ÝÔËÐÐ£¬ÎÞ·¨ÆôÓÃÏµÍ³¹¦ÄÜ¡£ >> "%LOG%"
     echo.
-    echo [å¤±è´¥] æœªèŽ·å¾—ç®¡ç†å‘˜æƒé™ã€‚è¯·å³é”®æœ¬æ–‡ä»¶ -^> ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œã€‚
+    echo [Ê§°Ü] Î´»ñµÃ¹ÜÀíÔ±È¨ÏÞ¡£
+    echo ÇëÓÒ¼ü±¾ÎÄ¼þ£¬Ñ¡Ôñ¡¸ÒÔ¹ÜÀíÔ±Éí·ÝÔËÐÐ¡¹¡£
     pause
     exit /b 1
 )
-echo ç®¡ç†å‘˜æƒé™ï¼šå·²ç¡®è®¤ >> "%LOG%"
+echo ¹ÜÀíÔ±È¨ÏÞ£ºÒÑÈ·ÈÏ >> "%LOG%"
 
-REM ä¸¤ä¸ªåŠŸèƒ½ç¼ºä¸€ä¸å¯ï¼š
-REM   Microsoft-Windows-Subsystem-Linux = WSL æœ¬ä½“
-REM   VirtualMachinePlatform            = WSL2 ä¾èµ–çš„è½»é‡è™šæ‹Ÿæœºå¹³å°
-REM                                       ï¼ˆå®¶åº­ç‰ˆæ²¡æœ‰ Hyper-Vï¼ŒWSL2 å¿…é¡»é å®ƒï¼‰
+REM Á½¸ö¹¦ÄÜÈ±Ò»²»¿É£º
+REM   Microsoft-Windows-Subsystem-Linux = WSL ±¾Ìå
+REM   VirtualMachinePlatform            = WSL2 ÒÀÀµµÄÇáÁ¿ÐéÄâ»úÆ½Ì¨
+REM                                       £¨¼ÒÍ¥°æÃ»ÓÐ Hyper-V£¬WSL2 Ö»ÄÜ¿¿Ëü£©
 for %%F in (Microsoft-Windows-Subsystem-Linux VirtualMachinePlatform) do (
     echo. >> "%LOG%"
-    echo --- å¯ç”¨ %%F --- >> "%LOG%"
+    echo --- ÆôÓÃ %%F --- >> "%LOG%"
     dism.exe /online /enable-feature /featurename:%%F /all /norestart >> "%LOG%" 2>&1
-    echo é€€å‡ºç : %ERRORLEVEL% >> "%LOG%"
+    echo ÍË³öÂë: %ERRORLEVEL% >> "%LOG%"
 )
 
 echo. >> "%LOG%"
-echo --- å½“å‰åŠŸèƒ½çŠ¶æ€ --- >> "%LOG%"
+echo --- µ±Ç°¹¦ÄÜ×´Ì¬ --- >> "%LOG%"
 dism.exe /online /get-featureinfo /featurename:Microsoft-Windows-Subsystem-Linux | findstr /C:"State" >> "%LOG%" 2>&1
 dism.exe /online /get-featureinfo /featurename:VirtualMachinePlatform | findstr /C:"State" >> "%LOG%" 2>&1
 
 echo. >> "%LOG%"
-echo === å®Œæˆ %DATE% %TIME% === >> "%LOG%"
-echo æ³¨æ„ï¼šåŠŸèƒ½å¯ç”¨åŽéœ€è¦é‡å¯ç”µè„‘æ‰èƒ½ç”Ÿæ•ˆã€‚ >> "%LOG%"
+echo === Íê³É %DATE% %TIME% === >> "%LOG%"
+echo ×¢Òâ£º¹¦ÄÜÆôÓÃºóÐèÒªÖØÆôµçÄÔ²ÅÄÜÉúÐ§¡£ >> "%LOG%"
 
 echo.
-echo [å®Œæˆ] ç»“æžœå·²å†™å…¥ %LOG%
-echo æ³¨æ„ï¼šéœ€è¦é‡å¯ç”µè„‘åŽ WSL2 æ‰èƒ½ç”Ÿæ•ˆã€‚
+echo [Íê³É] ½á¹ûÒÑÐ´Èë %LOG%
+echo ×¢Òâ£ºÐèÒªÖØÆôµçÄÔºó WSL2 ²ÅÄÜÉúÐ§¡£
 pause
