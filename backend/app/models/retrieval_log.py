@@ -1,5 +1,6 @@
+from sqlalchemy import JSON, Column, DateTime, Index, Integer, Text, func
+
 from app.database import Base
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Index, func
 
 
 class RetrievalLog(Base):
@@ -13,7 +14,11 @@ class RetrievalLog(Base):
     __tablename__ = "retrieval_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    query = Column(Text, nullable=False)                     # 用户问题
+    query = Column(Text, nullable=False)                     # 用户问题（原话）
+    # 多轮追问经指代消解后、实际拿去检索的问题（见 services/query_rewrite.py）。
+    # 单独存一列而不是覆盖 query：排查检索质量时要能区分
+    # 「问题本身写得不好」和「改写改歪了」——这两类问题的修法完全不同。
+    rewritten_query = Column(Text, nullable=True)
     user_id = Column(Integer, nullable=True)                 # 提问用户
     conversation_id = Column(Integer, nullable=True)         # 所属会话
 
@@ -26,6 +31,9 @@ class RetrievalLog(Base):
 
     fused_count = Column(Integer, nullable=True)             # RRF 融合后的候选数
     dedup_removed = Column(Integer, nullable=True)           # 被去冗余剔除的条数
+    # 精排明细：{model, input_count, output_count, reordered, top_scores}
+    # reordered 就是"精排是否真的改变了排序"，用来判断它有没有白跑
+    rerank = Column(JSON, nullable=True)
     final_count = Column(Integer, nullable=True)             # 最终注入 Prompt 的片段数
     final_chunk_ids = Column(JSON, nullable=True)            # 最终入选的 chunk ID
 

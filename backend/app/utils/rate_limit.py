@@ -16,7 +16,6 @@ Redis 可用时用 Redis（多 worker 共享配额），否则退化为进程内
 import logging
 import threading
 import time
-from collections import defaultdict
 
 from fastapi import Depends, HTTPException, Request, status
 

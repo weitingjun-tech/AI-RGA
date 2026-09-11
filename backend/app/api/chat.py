@@ -1,44 +1,44 @@
 """问答 API — 核心对话接口"""
 import asyncio
 import json
+import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-import logging
-from datetime import datetime
-
 from app.config import (
-    RETRIEVAL_TOP_K,
-    RETRIEVAL_LOG_ENABLED,
     KB_ACL_ENABLED,
+    QUERY_REWRITE_ENABLED,
     RATE_LIMIT_CHAT,
+    RETRIEVAL_LOG_ENABLED,
+    RETRIEVAL_TOP_K,
 )
-from app.services.permission_service import resolve_query_kb_ids
-from app.utils.rate_limit import user_rate_limit
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models.user import User
 from app.models.conversation import Conversation
-from app.models.message import Message
 from app.models.knowledge_base import KnowledgeBase
+from app.models.message import Message
 from app.models.retrieval_log import RetrievalLog
+from app.models.user import User
+from app.services.permission_service import resolve_query_kb_ids
+from app.utils.rate_limit import user_rate_limit
 
 logger = logging.getLogger("rag-app")
 from app.schemas import (
     ChatRequest,
-    ConversationResponse,
     ConversationList,
+    ConversationResponse,
     FeedbackRequest,
 )
+from app.services.query_rewrite import rewrite_query
 from app.services.rag_service import (
-    search_knowledge,
-    generate_answer_stream,
     generate_chat_stream,
-    save_message,
-    get_or_create_conversation,
     get_conversation_history,
+    get_or_create_conversation,
+    save_message,
+    search_knowledge,
     update_conversation_title,
 )
 
@@ -158,10 +158,31 @@ async def send_message(
     # 1. 获取或创建会话
     conv = get_or_create_conversation(db, current_user.id, data.conversation_id)
 
-    # 2. 保存用户消息
-    save_message(db, conv.id, "user", data.query)
+    # **立刻取出普通整数**，后面一律用 conv_id，不再碰 conv 这个 ORM 对象。
+    #
+    # 原因：下面的回答是流式返回的，`stream()` 真正执行时，请求处理函数
+    # 早已返回，依赖注入的收尾逻辑已经把数据库会话关掉了。
+    # 会话关闭时 SQLAlchemy 会把所有 ORM 实例"过期 + 脱离"，此时再读
+    # `conv.id` 会触发一次重新加载，而对象已经没有会话可用了，直接抛
+    # `Instance <Conversation> is not bound to a Session`。
+    #
+    # 这个坑的隐蔽之处在于：**它取决于中途有没有 commit**。
+    # 每次 commit 都会让会话里所有对象过期；只要在流式返回之前
+    # 恰好读过一次 `conv.id`，对象就会被顺带刷新，问题不出现。
+    # 所以一旦调整了中间代码的顺序（哪怕只是挪动一行取历史），
+    # 就可能把原本"碰巧没事"变成必现的报错。
+    conv_id = conv.id
 
-    # 3. 权限收敛 —— **必须在检索之前**
+    # 2. 取历史（最近 10 轮）—— 必须在保存本条消息**之前**取。
+    #    顺序反了的话，当前问题会同时出现在 history 末尾和 generate_chat_stream
+    #    的 query 参数里，在 Prompt 中重复出现一次。
+    #    而且多轮改写也依赖它：没有历史，「它支持哪些数据库」根本无从消解。
+    history = get_conversation_history(db, conv_id, limit=10)
+
+    # 3. 保存用户消息
+    save_message(db, conv_id, "user", data.query)
+
+    # 4. 权限收敛 —— **必须在检索之前**
     #    把请求里的 kb_ids 换成"用户真的有权限的那些"。
     #    注意 data.kb_ids 为 None 时表示"全部知识库"，这里会被展开成
     #    "用户可访问的那些"，而不是真的检索全部——否则就是权限绕过。
@@ -176,15 +197,23 @@ async def send_message(
         kbs = db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(permitted_kb_ids)).all()
         collection_names = [kb.collection_name for kb in kbs] or []
 
+    # 5. 检索改写（指代消解）。
+    #    只在问题确实依赖上文时才触发，否则白白多等一次 LLM 推理。
+    #    改写**只用于检索**：最终回答的仍然是用户原本那句话（连同历史一起交给模型）。
+    search_query = data.query
+    if QUERY_REWRITE_ENABLED:
+        search_query = await asyncio.to_thread(rewrite_query, data.query, history)
+
     # 向量检索中的 embedding 计算是同步阻塞的 CPU/GPU 操作。
     # 直接在 async 函数里调用会阻塞事件循环，导致并发请求被迫排队，
     # 因此通过 asyncio.to_thread 放到线程池执行。
     context, sources, trace = await asyncio.to_thread(
-        search_knowledge, data.query, RETRIEVAL_TOP_K, collection_names
+        search_knowledge, search_query, RETRIEVAL_TOP_K, collection_names
     )
     if trace is not None:
         # 记录下来便于事后核对"这次到底查了哪些库"
         trace["permitted_kb_ids"] = permitted_kb_ids
+        trace["original_query"] = data.query
 
     # 4. 落库检索日志：记录本次检索的双路候选、融合与耗时。
     #    用户点踩时，可据此判断「是没检索到，还是检索到了但模型没用」。
@@ -193,14 +222,17 @@ async def send_message(
         try:
             log = RetrievalLog(
                 query=data.query,
+                # 没改写就不重复存一份，便于用 `rewritten_query IS NOT NULL` 统计改写触发率
+                rewritten_query=search_query if search_query != data.query else None,
                 user_id=current_user.id,
-                conversation_id=conv.id,
+                conversation_id=conv_id,
                 kb_ids=data.kb_ids,
                 collection_names=trace.get("collection_names"),
                 vector_hits=trace.get("vector_hits"),
                 bm25_hits=trace.get("bm25_hits"),
                 fused_count=trace.get("fused_count"),
                 dedup_removed=trace.get("dedup_removed"),
+                rerank=trace.get("rerank"),
                 final_count=trace.get("final_count"),
                 final_chunk_ids=trace.get("final_chunk_ids"),
                 latency_ms=trace.get("latency_ms"),
@@ -218,10 +250,7 @@ async def send_message(
         except Exception as e:
             logger.warning(f"写入检索日志失败（不影响问答）: {e}")
 
-    # 4. 获取历史（最近 10 轮对话）
-    history = get_conversation_history(db, conv.id, limit=10)
-
-    # 5. 流式返回
+    # 6. 流式返回
     async def stream():
         full_answer = ""
         try:
@@ -231,14 +260,14 @@ async def send_message(
 
             # 保存助手消息（关联本次检索日志，使后续反馈可追溯）
             msg = save_message(
-                db, conv.id, "assistant", full_answer, sources, retrieval_log_id
+                db, conv_id, "assistant", full_answer, sources, retrieval_log_id
             )
 
             # 自动生成标题
-            update_conversation_title(db, conv.id, data.query)
+            update_conversation_title(db, conv_id, data.query)
 
             # 返回引用来源 + 消息 ID（前端据此提交点赞/点踩反馈）
-            yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv.id, 'message_id': msg.id, 'sources': sources}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'message_id': msg.id, 'sources': sources}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"

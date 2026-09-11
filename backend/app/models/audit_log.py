@@ -1,5 +1,6 @@
-from app.database import Base
 from sqlalchemy import Column, DateTime, Index, Integer, String, Text, func
+
+from app.database import Base
 
 
 class AuditLog(Base):

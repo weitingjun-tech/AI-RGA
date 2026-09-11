@@ -107,6 +107,37 @@ DEDUP_JACCARD_THRESHOLD = float(os.getenv("DEDUP_JACCARD_THRESHOLD", "0.8"))
 # 是否将每次检索的明细写入 retrieval_logs 表（用于 bad case 归因与效果分析）
 RETRIEVAL_LOG_ENABLED = os.getenv("RETRIEVAL_LOG_ENABLED", "true").lower() == "true"
 
+# ---------------------------------------------------------------------------
+# 精排（Reranker）
+# ---------------------------------------------------------------------------
+# 混合检索是"粗排"：召回一批候选，快但不够准。
+# 精排用 Cross-Encoder 把 (问题, 候选) 拼在一起打分，准得多但慢，
+# 因此只用来重排少量候选——这也是业界标准的两段式检索。
+RERANK_ENABLED = os.getenv("RERANK_ENABLED", "false").lower() == "true"
+# bge-reranker-base 约 1.1GB，CPU 上重排 20 条候选约 1~2 秒。
+# 换 v2-m3 效果更好但更慢，按机器条件取舍。
+RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+
+# 用精排分数做**拒答判定**：低于该值的候选被视为"不对口"，直接清空，
+# 让上层走"知识库中未收录"的拒答路径。0 表示关闭该行为。
+#
+# 为什么需要它：向量分数**分不开**"知识库里有没有答案"这两种情况——
+# 实测无答案问题的向量最高分均值 0.53，有答案的 0.59，几乎重叠，
+# 因此单纯调 RELEVANCE_THRESHOLD 怎么也调不好。
+# 精排分数则差 4~5 倍（0.19 vs 0.87），35 条评测样本上的可用阈值区间是
+# (0.089, 0.478)，0.35 取其中间，能做到拒答正确 4/5 且零误伤。
+#
+# 注意这是**分类阈值不是排序阈值**：它只决定"这条要不要"，不参与先后。
+RERANK_REFUSAL_THRESHOLD = float(os.getenv("RERANK_REFUSAL_THRESHOLD", "0.35"))
+
+# ---------------------------------------------------------------------------
+# 多轮对话的检索改写（指代消解）
+# ---------------------------------------------------------------------------
+# 用户第二轮问「它支持哪些数据库」时，直接拿这句话去检索是查不到东西的。
+# 开启后先用 LLM 把追问改写成独立可检索的问题，再拿改写结果去检索。
+# 代价是每轮多一次 LLM 调用（CPU 上 1~3 秒），因此只在问题**确实依赖上文**时才触发。
+QUERY_REWRITE_ENABLED = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
+
 # RAG 系统提示词（可按业务场景通过环境变量覆盖，占位符 {context} 会被替换为检索到的知识库内容）
 RAG_SYSTEM_PROMPT = os.getenv("RAG_SYSTEM_PROMPT", """你是一位专业的技术支持工程师，服务于 CloudFlow 智能数据集成平台的客户。
 

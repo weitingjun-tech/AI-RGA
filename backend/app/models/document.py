@@ -1,5 +1,16 @@
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
+
 from app.database import Base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, BigInteger, Enum, func
+
 
 class Document(Base):
     __tablename__ = "documents"

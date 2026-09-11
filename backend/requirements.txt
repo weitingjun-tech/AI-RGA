@@ -5,7 +5,15 @@ aiomysql==0.2.0
 pymysql==1.1.1
 alembic==1.14.0
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+# 密码哈希**直接**用 bcrypt（见 app/services/auth_service.py），没有经过 passlib。
+#
+# 这里曾经写的是 passlib[bcrypt]==1.7.4，有两个问题：
+#   1. passlib 是死依赖——全项目没有一处 import 它
+#   2. passlib 1.7.4（2020 年发布）与 bcrypt 5.0 不兼容，任何一次哈希都会抛
+#      ValueError。它只是因为没被调用才没出事，属于"定时炸弹"
+# 改回显式声明 bcrypt 并锁版本：之前 bcrypt 是由 passlib[bcrypt] 间接带入的，
+# 等于**没锁**——上游一发布新版本，全新部署的哈希行为就可能变。
+bcrypt==5.0.0
 python-multipart==0.0.19
 celery==5.4.0
 redis==5.2.1

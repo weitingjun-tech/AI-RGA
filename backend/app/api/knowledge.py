@@ -1,51 +1,54 @@
 """知识库管理 API（仅管理员）"""
+import logging
 import os
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.database import get_db, SessionLocal
+from app.config import (
+    ALLOWED_EXTENSIONS,
+    MAX_UPLOAD_SIZE,
+    RATE_LIMIT_UPLOAD,
+    UPLOAD_DIR,
+)
+from app.database import get_db
 from app.middleware.auth import get_admin_user, get_current_user
-from app.models.user import User
-from app.models.document import Document
-from app.models.knowledge_base import KnowledgeBase
 from app.models.conversation import Conversation
+from app.models.document import Document
+from app.models.kb_permission import KbPermission
+from app.models.knowledge_base import KnowledgeBase
 from app.models.message import Message
 from app.models.retrieval_log import RetrievalLog
-from app.models.kb_permission import KbPermission
+from app.models.user import User
 from app.schemas import (
-    DocumentResponse,
     DocumentList,
     DocumentProcessStatus,
-    KnowledgeBaseCreate,
-    KnowledgeBaseUpdate,
-    KnowledgeBaseResponse,
-    KnowledgeBaseList,
     KbPermissionGrant,
+    KnowledgeBaseCreate,
+    KnowledgeBaseList,
+    KnowledgeBaseResponse,
+    KnowledgeBaseUpdate,
 )
+from app.services.audit_service import audit_log
 from app.services.kb_service import (
-    process_document,
     delete_document_from_chroma,
-    reindex_document,
     drop_collection,
     get_collection,
 )
-from app.config import UPLOAD_DIR, MAX_UPLOAD_SIZE, ALLOWED_EXTENSIONS, CHROMA_COLLECTION_NAME
-from app.utils.file_security import sanitize_filename, validate_file, FileValidationError
-from app.services.task_dispatch import enqueue_document_task
-from app.services.audit_service import audit_log
 from app.services.permission_service import (
     get_accessible_kb_ids,
-    require_kb_access,
-    can_access_kb,
 )
-from app.config import KB_ACL_ENABLED, RATE_LIMIT_UPLOAD
+from app.services.task_dispatch import enqueue_document_task
+from app.utils.file_security import (
+    FileValidationError,
+    sanitize_filename,
+    validate_file,
+)
 from app.utils.rate_limit import user_rate_limit
 
-import logging
 logger = logging.getLogger("rag-app")
 
 router = APIRouter(prefix="/api/knowledge", tags=["知识库管理"])

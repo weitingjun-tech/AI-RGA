@@ -1,12 +1,36 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+# bcrypt 只处理前 72 个**字节**，超出部分会直接抛 ValueError
+# （不是静默截断——bcrypt 5.0 起改为报错，避免"用户以为自己设了长密码"）。
+#
+# 关键坑：限制是**字节**不是字符。一个汉字在 UTF-8 下占 3 字节，
+# 所以 25 个汉字的密码就有 75 字节，已经越界了。
+# 只写 max_length=100（字符）根本挡不住，会一路走到 bcrypt 才炸成 500。
+#
+# 在 Schema 层拦下来，是为了把"服务端 500"变成"客户端 422 + 一句看得懂的提示"。
+BCRYPT_MAX_BYTES = 72
+
+
+def _check_password_byte_length(value: str) -> str:
+    encoded = len(value.encode("utf-8"))
+    if encoded > BCRYPT_MAX_BYTES:
+        raise ValueError(
+            f"密码过长：最多 {BCRYPT_MAX_BYTES} 字节，当前 {encoded} 字节。"
+            f"注意一个汉字占 3 字节（约 {BCRYPT_MAX_BYTES // 3} 个汉字封顶），"
+            "纯英文数字则可以更长。"
+        )
+    return value
 
 
 # ========== Auth ==========
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=2, max_length=50)
     password: str = Field(..., min_length=6, max_length=100)
+
+    _validate_password_bytes = field_validator("password")(_check_password_byte_length)
 
 
 class UserLogin(BaseModel):
@@ -17,6 +41,10 @@ class UserLogin(BaseModel):
 class ChangePassword(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6, max_length=100)
+
+    _validate_password_bytes = field_validator("new_password")(
+        _check_password_byte_length
+    )
 
 
 class RefreshRequest(BaseModel):

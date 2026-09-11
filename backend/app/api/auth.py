@@ -2,37 +2,37 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.config import (
+    LOGIN_LOCKOUT_MINUTES,
+    LOGIN_MAX_FAILURES,
+    RATE_LIMIT_LOGIN,
+    RATE_LIMIT_REGISTER,
+)
 from app.database import get_db
+from app.middleware.auth import get_current_user
+from app.models.user import User
 from app.schemas import (
-    UserRegister,
-    UserLogin,
-    TokenResponse,
-    UserInfo,
     ChangePassword,
     RefreshRequest,
+    TokenResponse,
+    UserInfo,
+    UserLogin,
+    UserRegister,
 )
+from app.services.audit_service import audit_log
 from app.services.auth_service import (
-    register_user,
     authenticate_user,
     change_user_password,
     create_access_token,
     create_refresh_token,
+    register_user,
 )
-from app.middleware.auth import get_current_user
-from app.models.user import User
-from app.services.audit_service import audit_log
 from app.utils.rate_limit import (
-    ip_rate_limit,
+    clear_login_failures,
     client_ip,
+    ip_rate_limit,
     is_account_locked,
     record_login_failure,
-    clear_login_failures,
-)
-from app.config import (
-    RATE_LIMIT_LOGIN,
-    RATE_LIMIT_REGISTER,
-    LOGIN_MAX_FAILURES,
-    LOGIN_LOCKOUT_MINUTES,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])

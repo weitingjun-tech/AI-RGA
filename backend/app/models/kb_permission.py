@@ -1,4 +1,3 @@
-from app.database import Base
 from sqlalchemy import (
     Column,
     DateTime,
@@ -9,6 +8,8 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+
+from app.database import Base
 
 
 class KbPermission(Base):

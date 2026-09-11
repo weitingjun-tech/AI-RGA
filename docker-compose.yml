@@ -111,6 +111,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       APP_ENV: production
       LOG_FORMAT: json
+      # 多轮检索改写：把「它支持哪些数据库」这类追问改写成可独立检索的问题。
+      # 只在问题确实依赖上文时才触发，不增加明显开销。
+      QUERY_REWRITE_ENABLED: ${QUERY_REWRITE_ENABLED:-true}
+      # 精排默认关闭：CPU 上每次提问要多等约 8 秒，而它作为排序手段没有收益。
+      # 它真正有用的是拒答判定，详见 backend/.env.example 里的说明。
+      # 有 GPU 时把这里改成 true 很值得。
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_REFUSAL_THRESHOLD: ${RERANK_REFUSAL_THRESHOLD:-0.35}
       # 迁移由 backend 容器启动时执行；worker 不重复执行
       RUN_MIGRATIONS_ON_STARTUP: "true"
     volumes:

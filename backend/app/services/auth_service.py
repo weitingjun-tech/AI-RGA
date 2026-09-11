@@ -1,8 +1,15 @@
-import bcrypt
 from datetime import datetime, timedelta
-from jose import jwt, JWTError
+
+import bcrypt
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
-from app.config import JWT_SECRET, JWT_ALGORITHM, JWT_ACCESS_EXPIRE_MINUTES, JWT_REFRESH_EXPIRE_DAYS
+
+from app.config import (
+    JWT_ACCESS_EXPIRE_MINUTES,
+    JWT_ALGORITHM,
+    JWT_REFRESH_EXPIRE_DAYS,
+    JWT_SECRET,
+)
 from app.models.user import User
 
 

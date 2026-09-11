@@ -1,46 +1,45 @@
 """知识库管理服务：文档解析、分块、向量化、入库"""
 import os
+
 # 把 HuggingFace 缓存目录设到 D 盘，否则 C 盘会满
 os.environ.setdefault("HF_HOME", "D:/mydo/huggingface_cache")
 # 强制离线模式 —— 模型已在本地缓存，不需要联网下载
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import hashlib
+import logging
 import shutil
-import tempfile
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
+import chromadb
 from bs4 import BeautifulSoup
-from ebooklib import epub, ITEM_DOCUMENT
+from chromadb.config import Settings as ChromaSettings
+from ebooklib import ITEM_DOCUMENT, epub
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
     CSVLoader,
     Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
 )
-from langchain_core.documents import Document as LCDocument
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+from langchain_core.documents import Document as LCDocument
 from sqlalchemy.orm import Session
 
 from app.config import (
-    CHROMA_PERSIST_DIR,
     CHROMA_COLLECTION_NAME,
-    CHUNK_SIZE,
+    CHROMA_PERSIST_DIR,
     CHUNK_OVERLAP,
-    EMBEDDING_MODEL,
+    CHUNK_SIZE,
     EMBEDDING_DEVICE,
+    EMBEDDING_MODEL,
     UPLOAD_DIR,
 )
 from app.models.document import Document
 from app.models.knowledge_base import KnowledgeBase
 from app.utils.cache import clear_cache
 
-import logging
 logger = logging.getLogger("rag-app")
 
 

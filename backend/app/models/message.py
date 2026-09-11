@@ -1,6 +1,19 @@
-from app.database import Base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, Index, Enum, func
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import relationship
+
+from app.database import Base
+
 
 class Message(Base):
     __tablename__ = "messages"

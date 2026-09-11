@@ -1,6 +1,4 @@
 """RAG 问答服务：检索增强生成全流程"""
-import asyncio
-import json
 import logging
 import re
 import time
@@ -14,34 +12,33 @@ logger = logging.getLogger("rag-app")
 # 语料发生变更时必须通过 clear_bm25_cache() 失效，否则会检索到已删除内容。
 _bm25_cache: dict[str, Optional[dict]] = {}
 
-from langchain_ollama import ChatOllama
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_ollama import ChatOllama
 from sqlalchemy.orm import Session
 
 from app.config import (
-    OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
-    RETRIEVAL_TOP_K,
-    RELEVANCE_THRESHOLD,
-    RAG_SYSTEM_PROMPT,
-    HYBRID_SEARCH_ENABLED,
-    HYBRID_CANDIDATE_K,
-    RRF_K,
     DEDUP_ENABLED,
     DEDUP_JACCARD_THRESHOLD,
-)
-from app.utils.cache import register_invalidation_hook
-from app.services.kb_service import (
-    get_embedding_model,
-    get_chroma_collection,
-    get_collection,
-    get_chroma_client,
+    HYBRID_CANDIDATE_K,
+    HYBRID_SEARCH_ENABLED,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    RAG_SYSTEM_PROMPT,
+    RELEVANCE_THRESHOLD,
+    RERANK_REFUSAL_THRESHOLD,
+    RETRIEVAL_TOP_K,
+    RRF_K,
 )
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.utils.cache import query_cache
-
+from app.services.kb_service import (
+    get_chroma_client,
+    get_collection,
+    get_embedding_model,
+)
+from app.services.rerank_service import rerank
+from app.utils.cache import query_cache, register_invalidation_hook
 
 # ==================== RAG System Prompt ====================
 # 模板定义在 app/config.py，可通过环境变量 RAG_SYSTEM_PROMPT 覆盖，以适配不同业务场景
@@ -410,7 +407,29 @@ def retrieve(
         all_cands, removed = _dedup_candidates(all_cands, DEDUP_JACCARD_THRESHOLD)
         dedup_removed_total += removed
 
-    selected = all_cands[:top_k]
+    # 精排：在"宽召回"的候选上重新排序，再取前 top_k。
+    # 两段式的意义：粗排负责"不漏"（候选多、成本低），精排负责"排准"（候选少、算得细）。
+    # 精排只能重排、不能召回，所以它失败时退回融合排序的结果即可，不会丢内容。
+    selected, rerank_detail = rerank(query, all_cands, top_k)
+    if rerank_detail is None:
+        # 精排被跳过（未开启 / 候选不足 / 模型不可用），沿用融合排序
+        selected = all_cands[:top_k]
+    elif RERANK_REFUSAL_THRESHOLD > 0:
+        # 精排分数的第二个用途：判断"知识库里到底有没有答案"。
+        #
+        # 这件事向量分数做不到——实测无答案问题的向量最高分均值 0.53、
+        # 有答案的 0.59，两个分布几乎重叠，所以把 RELEVANCE_THRESHOLD
+        # 往哪边调都是错的。精排分数则差 4~5 倍（0.19 vs 0.87）。
+        #
+        # 低于阈值的候选全部清空后，上层会拿到"暂无相关知识库内容"，
+        # 走正常的拒答路径——而不是把一堆不对口的内容塞给模型去发挥。
+        kept = [
+            c for c in selected
+            if c.get("rerank_score", 0.0) >= RERANK_REFUSAL_THRESHOLD
+        ]
+        rerank_detail["refusal_threshold"] = RERANK_REFUSAL_THRESHOLD
+        rerank_detail["refusal_filtered"] = len(selected) - len(kept)
+        selected = kept
 
     trace = {
         "query": query,
@@ -419,6 +438,7 @@ def retrieve(
         "bm25_hits": bm25_hits_all[:20],
         "fused_count": len(all_cands),
         "dedup_removed": dedup_removed_total,
+        "rerank": rerank_detail,
         "final_count": len(selected),
         "final_chunk_ids": [c["chunk_id"] for c in selected],
         "latency_ms": int((time.time() - t0) * 1000),

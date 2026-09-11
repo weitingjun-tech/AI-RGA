@@ -43,3 +43,8 @@ uploads/*
 .claude/scheduled_tasks.json
 .claude/settings.json
 .claude/settings.local.json
+
+# 测试覆盖率产物（pytest-cov）
+.coverage
+coverage.xml
+htmlcov/

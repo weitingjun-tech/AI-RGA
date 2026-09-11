@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一个分支连续推送时，取消还在跑的旧任务——
+# 否则推三次就会有三个一模一样的构建在跑，白等且浪费额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+  # 必须与 backend/Dockerfile 里的 ARG TORCH_VERSION 保持一致，
+  # 否则 CI 验证的依赖组合和镜像里装的可能不是同一套
+  TORCH_VERSION: "2.13.0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 后端静态检查
+  # ---------------------------------------------------------------------------
+  lint:
+    name: 后端静态检查 (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ruff 是单个二进制，不需要装项目依赖，因此这步几乎瞬间完成
+      - run: pip install ruff==0.8.6
+
+      - name: ruff check
+        working-directory: backend
+        run: ruff check app tests
+
+  # ---------------------------------------------------------------------------
+  # 后端测试
+  # ---------------------------------------------------------------------------
+  test:
+    name: 后端测试 (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      # 先单独装 CPU 版 torch：直接从 PyPI 装会拉到 2GB+ 的 CUDA 版本，
+      # 而 CI 和容器都没有 GPU。顺序与 Dockerfile 保持一致。
+      - name: 安装 CPU 版 torch
+        run: pip install --index-url https://download.pytorch.org/whl/cpu torch==${{ env.TORCH_VERSION }}
+
+      - name: 安装依赖
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: 运行测试
+        working-directory: backend
+        run: pytest --cov=app --cov-report=term-missing
+
+      # 覆盖率报告只是给人看的，不做门槛——覆盖率高低不等于测试有效，
+      # 拿它当 KPI 只会催生"为了凑数字而写的测试"。
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: backend/.coverage
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # 前端构建（TypeScript 类型检查 + Vite 打包）
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: 前端构建 (tsc + vite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      # 这一步才是真正的门槛：tsc 会拦住类型错误，vite 会拦住打包失败。
+      # oxlint 目前只报 warning（不会让 CI 变红），因此放在 build 之后，
+      # 作用是兜住**新引入**的 error 级问题。
+      - run: npm run build
+        working-directory: frontend
+
+      - run: npm run lint
+        working-directory: frontend
+
+  # ---------------------------------------------------------------------------
+  # 后端镜像构建
+  # ---------------------------------------------------------------------------
+  docker:
+    name: 后端镜像构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 只构建不推送：目的是验证 Dockerfile 本身可用。
+      # 这一层意义在于——Dockerfile 的正确性靠"读"是验证不了的，
+      # 必须真的跑一遍才知道依赖能不能装上、顺序对不对。
+      - name: 构建 backend 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          # GitHub Actions 缓存：torch 那一层有两百多兆，
+          # 不缓存的话每次跑都要重新下载
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

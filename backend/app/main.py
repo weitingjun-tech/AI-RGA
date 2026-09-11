@@ -1,8 +1,8 @@
 """
 RAG 企业级知识库问答系统 - FastAPI 入口
 """
-import os
 import logging
+import os
 import time
 
 from fastapi import FastAPI, Request
@@ -10,24 +10,24 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.database import engine, Base, SessionLocal
-from app.config import (
-    BACKEND_DIR,
-    CORS_ORIGINS,
-    UPLOAD_DIR,
-    CHROMA_PERSIST_DIR,
-    CHROMA_COLLECTION_NAME,
-    IS_PRODUCTION,
-    APP_ENV,
-    RUN_MIGRATIONS_ON_STARTUP,
-    RECONCILE_ON_STARTUP,
-    DOC_TASK_TIMEOUT_SECONDS,
-)
-from app.services.auth_service import seed_admin
-from app.utils.logging_config import setup_logging
-from app.utils.request_context import set_request_id, get_request_id
 # 导入全部模型，确保 create_all 能建出所有表（含多知识库相关的 knowledge_bases）
 import app.models  # noqa: F401
+from app.config import (
+    APP_ENV,
+    BACKEND_DIR,
+    CHROMA_COLLECTION_NAME,
+    CHROMA_PERSIST_DIR,
+    CORS_ORIGINS,
+    DOC_TASK_TIMEOUT_SECONDS,
+    IS_PRODUCTION,
+    RECONCILE_ON_STARTUP,
+    RUN_MIGRATIONS_ON_STARTUP,
+    UPLOAD_DIR,
+)
+from app.database import SessionLocal, engine
+from app.services.auth_service import seed_admin
+from app.utils.logging_config import setup_logging
+from app.utils.request_context import get_request_id, set_request_id
 
 # 配置日志（必须在其它模块打日志之前完成）
 setup_logging()
@@ -82,8 +82,8 @@ def _run_migrations() -> None:
 
 def _seed_default_kb(db):
     """确保至少存在一个默认知识库，并把历史遗留（kb_id 为空）的文档归入其中。"""
-    from app.models.knowledge_base import KnowledgeBase
     from app.models.document import Document
+    from app.models.knowledge_base import KnowledgeBase
 
     kb = db.query(KnowledgeBase).filter(KnowledgeBase.is_default == "true").first()
     if not kb:

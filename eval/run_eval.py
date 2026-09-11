@@ -11,8 +11,13 @@ RAG 检索质量评估脚本。
 - 拒答正确率: 知识库无答案时，最高相似度是否低于阈值（即不应给出引用）
 
 用法：
-    python run_eval.py                # 对比 向量-only / 混合检索
+    python run_eval.py                  # 依次跑三档并对比（默认）
     python run_eval.py --config hybrid
+    python run_eval.py --config rerank
+
+三档是递进的：向量 → 加 BM25 → 加精排。
+只看最终结果说明不了什么，**看每一档各贡献了多少**才是重点——
+如果某一档没有提升，就应该把它关掉，而不是因为"听起来更高级"就留着。
 """
 import argparse
 import json
@@ -21,11 +26,20 @@ import re
 import sys
 import time
 
+# 中文 Windows 上，输出被重定向到文件或管道时，Python 会退回用系统 ANSI 编码
+# （GBK）来写，遇到 ✓ / ✗ 这类符号直接抛 UnicodeEncodeError，
+# **整个评估脚本崩掉**——而控制台里直接跑却完全正常，属于只在特定调用方式下
+# 才暴露的问题（`python run_eval.py > result.txt` 就会踩到）。
+# 显式指定 UTF-8，让输出与调用方式无关。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 os.environ.setdefault("HF_HOME", "D:/mydo/huggingface_cache")
 
 from app.config import RELEVANCE_THRESHOLD, RETRIEVAL_TOP_K
-from app.services import rag_service
+from app.services import rag_service, rerank_service
 from app.utils.cache import clear_cache
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -141,7 +155,12 @@ def print_result(res: dict):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", choices=["both", "vector", "hybrid"], default="both")
+    ap.add_argument(
+        "--config",
+        choices=["both", "vector", "hybrid", "rerank"],
+        default="both",
+        help="both=跑全部三档并对比（默认）；其余为只跑单一配置",
+    )
     ap.add_argument("--kb-id", type=int, default=2, help="要评估的知识库 ID")
     args = ap.parse_args()
 
@@ -157,28 +176,41 @@ def main():
     print(f"评估知识库: {kb.name} (collection={kb.collection_name})")
     db.close()
 
-    configs = []
-    if args.config in ("both", "vector"):
-        configs.append(("向量检索（基线）", False, False))
-    if args.config in ("both", "hybrid"):
-        configs.append(("混合检索 + 去冗余", True, True))
+    # (标签, 混合检索, 去冗余, 精排)
+    # 默认跑三档，因为检索优化是**递进**的：
+    #   向量 → 加 BM25 补精确匹配 → 加精排重排顺序
+    # 分档跑才能看出每一层各自贡献了多少，而不是只有一个笼统的"变好了"。
+    all_configs = [
+        ("向量检索（基线）", False, False, False),
+        ("混合检索 + 去冗余", True, True, False),
+        ("混合检索 + 去冗余 + 精排", True, True, True),
+    ]
+    configs = {
+        "both": all_configs,
+        "vector": [all_configs[0]],
+        "hybrid": [all_configs[1]],
+        "rerank": [all_configs[2]],
+    }[args.config]
 
     results = []
-    for label, hybrid, dedup in configs:
+    for label, hybrid, dedup, use_rerank in configs:
         # 运行时切换检索配置（重新加载配置需重启，这里直接改模块变量）
         rag_service.HYBRID_SEARCH_ENABLED = hybrid
         rag_service.DEDUP_ENABLED = dedup
-        clear_cache()          # 清空检索缓存与 BM25 索引，确保两次配置互不污染
+        # 注意：rag_service 是 `from ... import rerank` 导入的函数对象，
+        # 但该函数在**自己的模块**里读取 RERANK_ENABLED，所以改这里的值对它生效
+        rerank_service.RERANK_ENABLED = use_rerank
+        clear_cache()          # 清空检索缓存与 BM25 索引，确保各配置互不污染
         rag_service.clear_bm25_cache()
 
         res = evaluate(label, collections, RETRIEVAL_TOP_K)
         results.append(res)
         print_result(res)
 
-    if len(results) == 2:
-        a, b = results
+    if len(results) > 1:
+        a, b = results[0], results[-1]
         print(f"\n{'='*76}")
-        print("对比结论")
+        print(f"对比结论：{a['label']} → {b['label']}")
         print(f"{'='*76}")
         print(f"  Hit@{RETRIEVAL_TOP_K}  : {a['hit_rate']:.1%} → {b['hit_rate']:.1%}  "
               f"({(b['hit_rate']-a['hit_rate'])*100:+.1f} 个百分点)")
@@ -187,6 +219,17 @@ def main():
         print(f"  MRR     : {a['mrr']:.3f} → {b['mrr']:.3f}  ({b['mrr']-a['mrr']:+.3f})")
         print(f"  延迟    : {a['avg_latency_ms']:.0f}ms → {b['avg_latency_ms']:.0f}ms  "
               f"({b['avg_latency_ms']-a['avg_latency_ms']:+.0f}ms)")
+
+        # 精排的收益主要体现在 MRR（把正确答案排到更前面），
+        # 而不是 Hit@K（有没有召回）。看起来"提升不明显"时先看 MRR。
+        if len(results) == 3:
+            m = results[1]
+            print("\n  其中「混合检索 → 加精排」这一段：")
+            print(f"    Hit@{RETRIEVAL_TOP_K}: {m['hit_rate']:.1%} → {b['hit_rate']:.1%}  "
+                  f"({(b['hit_rate']-m['hit_rate'])*100:+.1f} 个百分点)")
+            print(f"    MRR    : {m['mrr']:.3f} → {b['mrr']:.3f}  ({b['mrr']-m['mrr']:+.3f})")
+            print(f"    延迟   : {m['avg_latency_ms']:.0f}ms → {b['avg_latency_ms']:.0f}ms  "
+                  f"({b['avg_latency_ms']-m['avg_latency_ms']:+.0f}ms)  ← 精排的代价在这里")
 
     out = os.path.join(HERE, "eval_result.json")
     with open(out, "w", encoding="utf-8") as f:

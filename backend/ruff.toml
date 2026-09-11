@@ -1,0 +1,19 @@
+# Ruff 配置：只开**高信号**规则。
+#
+# 取舍说明：如果把 E/W 全开，会淹没在几百条行长、空行之类的风格提示里，
+# 真正的 bug（未定义名、未使用变量、语法错误）反而被埋掉。
+# pyflakes（F）找的是**真错误**，pycodestyle 的 E9 找的是**真语法问题**——
+# 这两类是"会让代码跑不起来"的问题，值得卡在 CI 上。
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = [
+    "E9",  # syntax error：语法错误
+    "F",   # pyflakes：未定义名、未使用导入/变量、f-string 缺占位符
+    "I",   # isort：导入顺序（统一风格，避免 review 时来回讨论）
+]
+
+[lint.per-file-ignores]
+# 测试里允许"导入了但只在 pytest 收集阶段用到"的写法
+"tests/*" = ["F401"]
