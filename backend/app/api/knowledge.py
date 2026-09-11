@@ -15,6 +15,7 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.retrieval_log import RetrievalLog
+from app.models.kb_permission import KbPermission
 from app.schemas import (
     DocumentResponse,
     DocumentList,
@@ -23,6 +24,7 @@ from app.schemas import (
     KnowledgeBaseUpdate,
     KnowledgeBaseResponse,
     KnowledgeBaseList,
+    KbPermissionGrant,
 )
 from app.services.kb_service import (
     process_document,
@@ -32,6 +34,16 @@ from app.services.kb_service import (
     get_collection,
 )
 from app.config import UPLOAD_DIR, MAX_UPLOAD_SIZE, ALLOWED_EXTENSIONS, CHROMA_COLLECTION_NAME
+from app.utils.file_security import sanitize_filename, validate_file, FileValidationError
+from app.services.task_dispatch import enqueue_document_task
+from app.services.audit_service import audit_log
+from app.services.permission_service import (
+    get_accessible_kb_ids,
+    require_kb_access,
+    can_access_kb,
+)
+from app.config import KB_ACL_ENABLED, RATE_LIMIT_UPLOAD
+from app.utils.rate_limit import user_rate_limit
 
 import logging
 logger = logging.getLogger("rag-app")
@@ -75,7 +87,10 @@ def get_document_status(
     return DocumentProcessStatus(id=doc.id, status=doc.status, chunk_count=doc.chunk_count)
 
 
-@router.post("/upload")
+@router.post(
+    "/upload",
+    dependencies=[Depends(user_rate_limit("upload", RATE_LIMIT_UPLOAD))],
+)
 async def upload_document(
     file: UploadFile = File(...),
     kb_id: Optional[int] = Form(None),
@@ -93,36 +108,57 @@ async def upload_document(
             )
 
     # 校验扩展名
-    ext = Path(file.filename).suffix.lower()
+    raw_name = file.filename or ""
+    ext = Path(raw_name).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不支持的文件类型，支持: {', '.join(ALLOWED_EXTENSIONS)}",
+            detail=f"不支持的文件类型，支持: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    # 校验大小
-    contents = await file.read()
-    size_mb = len(contents) / (1024 * 1024)
-    if size_mb > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"文件过大，最大支持 {MAX_UPLOAD_SIZE}MB",
-        )
-
-    # 保存文件
+    # 保存文件。
+    #
+    # 两点与历史实现不同：
+    # 1. **分块落盘**边写边判大小。历史实现是 `await file.read()` 一次性读进内存
+    #    再判大小——那时整个文件已经在内存里了，客户端发一个超大请求就能打挂服务。
+    # 2. **文件名取 basename**。历史实现是 `f"{uuid}_{file.filename}"`，
+    #    随机前缀挡不住 `../`，路径穿越依然成立。
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    # 防止文件名冲突
-    safe_filename = f"{uuid.uuid4().hex}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    safe_display_name = sanitize_filename(raw_name)
+    stored_name = f"{uuid.uuid4().hex}_{safe_display_name}"
+    file_path = os.path.join(UPLOAD_DIR, stored_name)
+
+    max_bytes = MAX_UPLOAD_SIZE * 1024 * 1024
+    written = 0
+    try:
+        with open(file_path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"文件过大，最大支持 {MAX_UPLOAD_SIZE}MB",
+                    )
+                f.write(chunk)
+
+        # 文件头校验：扩展名可以伪造，文件头不行
+        validate_file(ext, file_path)
+    except HTTPException:
+        # 半截文件 / 非法文件不要留在磁盘上
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+    except FileValidationError as exc:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     # 创建数据库记录
     doc = Document(
-        filename=safe_filename,
+        filename=stored_name,
         file_type=ext,
-        file_size=len(contents),
-        status="processing",
+        file_size=written,
+        status="queued",
         uploaded_by=current_user.id,
         kb_id=kb_id,
     )
@@ -130,28 +166,30 @@ async def upload_document(
     db.commit()
     db.refresh(doc)
 
-    # 异步处理文档（后台线程）
-    # 注意：不要在子线程里复用请求级 db session —— session 关闭后子线程操作会报
-    # "Packet sequence number wrong"，且 SQLAlchemy session 不是线程安全的。
-    import threading
+    # 投递到任务队列。
+    # 不要在请求里直接处理——解析 + 逐块算 embedding 可能要几十秒，
+    # 会占满 uvicorn 的请求处理能力，且 HTTP 超时后用户会看到失败但任务其实在跑。
+    mode = enqueue_document_task(doc.id, file_path, stored_name)
 
-    def _process_in_thread(doc_id: int, file_path: str, file_name: str):
-        thread_db = SessionLocal()
-        try:
-            process_document(thread_db, doc_id, file_path, file_name)
-        except Exception as exc:
-            logger.error(f"文档处理失败 doc_id={doc_id}: {exc}", exc_info=True)
-        finally:
-            thread_db.close()
-
-    thread = threading.Thread(
-        target=_process_in_thread,
-        args=(doc.id, file_path, file.filename),
-        daemon=True,
+    logger.info(
+        f"文档已入队 doc_id={doc.id} name={safe_display_name} "
+        f"size={written}B kb_id={kb_id} 投递方式={mode}"
     )
-    thread.start()
+    audit_log(
+        db, current_user, "document.upload",
+        target_type="document", target_id=doc.id,
+        detail={"filename": safe_display_name, "size": written, "kb_id": kb_id},
+    )
 
-    return {"message": "文档上传成功，正在处理中", "document_id": doc.id, "filename": file.filename}
+    return {
+        "message": "文档上传成功，已加入处理队列",
+        "document_id": doc.id,
+        "filename": safe_display_name,
+        # 如实告知走了哪种执行方式：降级时会返回 "thread"，
+        # 前端可以据此提示"当前为开发模式，重启可能丢失任务"
+        "queue_mode": mode,
+        "status": doc.status,
+    }
 
 
 @router.delete("/documents/{doc_id}")
@@ -173,10 +211,18 @@ def delete_document(
     if os.path.exists(file_path):
         os.remove(file_path)
 
+    # 审计要在删除之前写：删完再写的话，一旦写失败就彻底没有记录了
+    audit_log(
+        db, current_user, "document.delete",
+        target_type="document", target_id=doc_id,
+        detail={"filename": doc.filename, "kb_id": doc.kb_id, "chunks": doc.chunk_count},
+    )
+
     # 删除数据库记录
     db.delete(doc)
     db.commit()
 
+    logger.info(f"文档已删除 doc_id={doc_id} by user_id={current_user.id}")
     return {"message": "文档已删除"}
 
 
@@ -186,26 +232,40 @@ def reindex(
     current_user: User = Depends(get_admin_user),
     db: Session = Depends(get_db),
 ):
-    """重新索引文档"""
+    """重新索引文档。
+
+    与上传走同一条队列，因此同样具备重试与失败落库；
+    历史实现是起一个裸 daemon 线程，进程重启就没了。
+    """
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
 
-    import threading
+    file_path = os.path.join(UPLOAD_DIR, doc.filename)
+    if not os.path.exists(file_path):
+        doc.status = "error"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="源文件已丢失，无法重新索引，请重新上传",
+        )
 
-    def _reindex_in_thread(doc_id: int):
-        thread_db = SessionLocal()
-        try:
-            reindex_document(thread_db, doc_id)
-        except Exception as exc:
-            logger.error(f"重新索引失败 doc_id={doc_id}: {exc}", exc_info=True)
-        finally:
-            thread_db.close()
+    # 先把状态置为排队中并递增一个"索引版本"，避免重复点击产生的并发重建。
+    # process_document 内部是幂等的（会先清旧向量），所以并发重建不会产生脏数据，
+    # 但会浪费算力，这里能挡掉大部分重复请求。
+    doc.status = "queued"
+    doc.chunk_count = 0
+    db.commit()
 
-    thread = threading.Thread(target=_reindex_in_thread, args=(doc_id,), daemon=True)
-    thread.start()
+    audit_log(
+        db, current_user, "document.reindex",
+        target_type="document", target_id=doc_id,
+        detail={"filename": doc.filename},
+    )
 
-    return {"message": "正在重新索引"}
+    mode = enqueue_document_task(doc.id, file_path, doc.filename)
+    logger.info(f"文档重新索引入队 doc_id={doc_id} 投递方式={mode}")
+    return {"message": "已加入重新索引队列", "queue_mode": mode, "status": doc.status}
 
 
 # ==================== 系统统计（管理员） ====================
@@ -314,12 +374,22 @@ def list_knowledge_bases(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """列出全部知识库（含文档数与分块数）。
+    """列出**当前用户有权访问**的知识库（含文档数与分块数）。
 
-    对所有已登录用户开放：问答时需要知道有哪些知识库可选。
-    创建/修改/删除仍限管理员。
+    对所有已登录用户开放，但结果按权限过滤：
+    普通用户只看得到被授权的知识库，管理员看得到全部。
+
+    **不泄露"存在但无权访问"的知识库**——列表里不出现，
+    用户就不会知道有这么一个库，也就不会去猜它的内容。
     """
-    bases = db.query(KnowledgeBase).order_by(KnowledgeBase.id.asc()).all()
+    query = db.query(KnowledgeBase)
+    allowed = get_accessible_kb_ids(db, current_user)
+    if allowed is not None:
+        if not allowed:
+            return KnowledgeBaseList(bases=[], total=0)
+        query = query.filter(KnowledgeBase.id.in_(allowed))
+
+    bases = query.order_by(KnowledgeBase.id.asc()).all()
     return KnowledgeBaseList(
         bases=[_kb_to_response(db, kb) for kb in bases],
         total=len(bases),
@@ -353,6 +423,12 @@ def create_knowledge_base(
     # 预创建集合，确保立即可用
     get_collection(kb.collection_name)
 
+    audit_log(
+        db, current_user, "knowledge_base.create",
+        target_type="knowledge_base", target_id=kb.id,
+        detail={"name": kb.name, "collection": kb.collection_name},
+    )
+    logger.info(f"知识库已创建 id={kb.id} name={kb.name} by user_id={current_user.id}")
     return _kb_to_response(db, kb)
 
 
@@ -403,13 +479,149 @@ def delete_knowledge_base(
         )
 
     collection_name = kb.collection_name
+    kb_name = kb.name
+    # 授权记录随知识库一起清理（外键 ondelete=CASCADE 只在数据库层生效，
+    # 这里显式删除以便 ORM 层行为一致，也便于观察影响行数）
+    revoked = (
+        db.query(KbPermission).filter(KbPermission.kb_id == kb_id).delete()
+    )
     db.delete(kb)
     db.commit()
 
     # 删除对应的向量集合
     drop_collection(collection_name)
 
-    return {"message": f"知识库「{kb.name}」已删除"}
+    # 审计写在 commit 之后：删除动作已经生效，必须留痕
+    audit_log(
+        db, current_user, "knowledge_base.delete",
+        target_type="knowledge_base", target_id=kb_id,
+        detail={"name": kb_name, "collection": collection_name, "revoked_permissions": revoked},
+    )
+    logger.warning(
+        f"知识库已删除 id={kb_id} name={kb_name} "
+        f"by user_id={current_user.id} 同时清理授权={revoked} 条"
+    )
+    return {"message": f"知识库「{kb_name}」已删除"}
+
+
+# ==================== 权限管理（仅管理员） ====================
+
+@router.get("/bases/{kb_id}/permissions")
+def list_kb_permissions(
+    kb_id: int,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """查看某知识库的授权名单"""
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+
+    rows = (
+        db.query(KbPermission, User)
+        .join(User, User.id == KbPermission.user_id)
+        .filter(KbPermission.kb_id == kb_id)
+        .all()
+    )
+    return {
+        "kb_id": kb_id,
+        "kb_name": kb.name,
+        "permissions": [
+            {
+                "user_id": user.id,
+                "username": user.username,
+                "permission": perm.permission,
+                "granted_by": perm.granted_by,
+                "created_at": perm.created_at,
+            }
+            for perm, user in rows
+        ],
+    }
+
+
+@router.post("/bases/{kb_id}/permissions")
+def grant_kb_permission(
+    kb_id: int,
+    data: KbPermissionGrant,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """授予某用户对某知识库的访问权限（重复授权则更新权限级别）"""
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识库不存在")
+
+    target = db.query(User).filter(User.id == data.user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    if target.role == "admin":
+        # 管理员本来就无限制，再存一条授权只会让权限表产生误导性的记录
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该用户是管理员，本就拥有全部知识库权限，无需单独授权",
+        )
+
+    existing = (
+        db.query(KbPermission)
+        .filter(KbPermission.user_id == data.user_id, KbPermission.kb_id == kb_id)
+        .first()
+    )
+    if existing:
+        existing.permission = data.permission
+        existing.granted_by = current_user.id
+        action = "knowledge_base.permission_update"
+    else:
+        db.add(
+            KbPermission(
+                user_id=data.user_id,
+                kb_id=kb_id,
+                permission=data.permission,
+                granted_by=current_user.id,
+            )
+        )
+        action = "knowledge_base.permission_grant"
+    db.commit()
+
+    audit_log(
+        db, current_user, action,
+        target_type="knowledge_base", target_id=kb_id,
+        detail={"target_user_id": target.id, "target_username": target.username,
+                "permission": data.permission},
+    )
+    logger.info(
+        f"授权变更 kb_id={kb_id} user={target.username} "
+        f"permission={data.permission} by user_id={current_user.id}"
+    )
+    return {"message": f"已授予 {target.username} 对「{kb.name}」的 {data.permission} 权限"}
+
+
+@router.delete("/bases/{kb_id}/permissions/{user_id}")
+def revoke_kb_permission(
+    kb_id: int,
+    user_id: int,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+):
+    """撤销某用户对某知识库的访问权限"""
+    perm = (
+        db.query(KbPermission)
+        .filter(KbPermission.user_id == user_id, KbPermission.kb_id == kb_id)
+        .first()
+    )
+    if not perm:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该授权不存在")
+
+    db.delete(perm)
+    db.commit()
+
+    audit_log(
+        db, current_user, "knowledge_base.permission_revoke",
+        target_type="knowledge_base", target_id=kb_id,
+        detail={"target_user_id": user_id},
+    )
+    logger.warning(f"权限已撤销 kb_id={kb_id} user_id={user_id} by user_id={current_user.id}")
+    return {"message": "授权已撤销"}
 
 
 # ==================== 运营闭环：bad case 归档 ====================

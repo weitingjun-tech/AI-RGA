@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 import logging
 from datetime import datetime
 
-from app.config import RETRIEVAL_TOP_K, RETRIEVAL_LOG_ENABLED
+from app.config import (
+    RETRIEVAL_TOP_K,
+    RETRIEVAL_LOG_ENABLED,
+    KB_ACL_ENABLED,
+    RATE_LIMIT_CHAT,
+)
+from app.services.permission_service import resolve_query_kb_ids
+from app.utils.rate_limit import user_rate_limit
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models.user import User
@@ -137,7 +144,11 @@ def get_messages(
     return {"messages": messages, "total": total}
 
 
-@router.post("/send")
+@router.post(
+    "/send",
+    # 问答是最贵的接口（嵌入 + 检索 + LLM 推理），必须限流
+    dependencies=[Depends(user_rate_limit("chat", RATE_LIMIT_CHAT))],
+)
 async def send_message(
     data: ChatRequest,
     current_user: User = Depends(get_current_user),
@@ -150,11 +161,20 @@ async def send_message(
     # 2. 保存用户消息
     save_message(db, conv.id, "user", data.query)
 
-    # 3. 检索知识库（可限定到指定知识库，实现多知识库隔离）
+    # 3. 权限收敛 —— **必须在检索之前**
+    #    把请求里的 kb_ids 换成"用户真的有权限的那些"。
+    #    注意 data.kb_ids 为 None 时表示"全部知识库"，这里会被展开成
+    #    "用户可访问的那些"，而不是真的检索全部——否则就是权限绕过。
+    permitted_kb_ids = resolve_query_kb_ids(db, current_user, data.kb_ids)
+
     collection_names = None
-    if data.kb_ids:
-        kbs = db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(data.kb_ids)).all()
-        collection_names = [kb.collection_name for kb in kbs] or None
+    if KB_ACL_ENABLED and not permitted_kb_ids and current_user.role != "admin":
+        # 有 ACL 但一个可访问的知识库都没有：直接返回空检索结果，
+        # 绝不能因为列表为空就退化成"检索全部"
+        collection_names = []  # 空列表 = 检索不到任何东西（与 None 含义不同）
+    elif permitted_kb_ids:
+        kbs = db.query(KnowledgeBase).filter(KnowledgeBase.id.in_(permitted_kb_ids)).all()
+        collection_names = [kb.collection_name for kb in kbs] or []
 
     # 向量检索中的 embedding 计算是同步阻塞的 CPU/GPU 操作。
     # 直接在 async 函数里调用会阻塞事件循环，导致并发请求被迫排队，
@@ -162,6 +182,9 @@ async def send_message(
     context, sources, trace = await asyncio.to_thread(
         search_knowledge, data.query, RETRIEVAL_TOP_K, collection_names
     )
+    if trace is not None:
+        # 记录下来便于事后核对"这次到底查了哪些库"
+        trace["permitted_kb_ids"] = permitted_kb_ids
 
     # 4. 落库检索日志：记录本次检索的双路候选、融合与耗时。
     #    用户点踩时，可据此判断「是没检索到，还是检索到了但模型没用」。

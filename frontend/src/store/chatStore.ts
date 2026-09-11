@@ -1,6 +1,7 @@
 // RAG 知识库问答系统 - 聊天状态管理
 import { create } from 'zustand';
 import { chatApi } from '../services/api';
+import { API_BASE_URL } from '../config';
 import type { Conversation, Message, SourceCitation } from '../types';
 
 interface ChatState {
@@ -156,7 +157,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // 构建完整的 SSE URL
     const token = localStorage.getItem('access_token');
-    const baseUrl = 'http://localhost:8000';
+    const baseUrl = API_BASE_URL;
 
     const body = JSON.stringify({
       conversation_id: currentConversation?.id || undefined,

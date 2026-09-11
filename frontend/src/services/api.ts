@@ -1,9 +1,10 @@
 // RAG 知识库问答系统 - API 服务层
 import axios, { AxiosError } from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
+import { API_BASE_URL } from '../config';
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: API_BASE_URL,
   timeout: 60000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -25,8 +26,9 @@ api.interceptors.response.use(
       const refreshToken = localStorage.getItem('refresh_token');
       if (refreshToken) {
         try {
-          const res = await axios.post('http://localhost:8000/api/auth/refresh', null, {
-            params: { refresh_token: refreshToken },
+          const res = await axios.post(`${API_BASE_URL}/api/auth/refresh`, null, {
+            // refresh token 放请求体而非 query —— query 会进 nginx access log 和浏览器历史
+            data: { refresh_token: refreshToken },
           });
           localStorage.setItem('access_token', res.data.access_token);
           if (error.config?.headers) {
@@ -106,6 +108,29 @@ export const knowledgeApi = {
   getStats: () => api.get('/api/knowledge/stats'),
   getUsers: () => api.get('/api/knowledge/users'),
   deleteUser: (id: number) => api.delete(`/api/knowledge/users/${id}`),
+
+  // 知识库授权（ACL）：控制哪些用户能检索/写入哪个知识库
+  listPermissions: (kbId: number) =>
+    api.get(`/api/knowledge/bases/${kbId}/permissions`),
+  grantPermission: (kbId: number, userId: number, permission: 'read' | 'write') =>
+    api.post(`/api/knowledge/bases/${kbId}/permissions`, {
+      user_id: userId,
+      permission,
+    }),
+  revokePermission: (kbId: number, userId: number) =>
+    api.delete(`/api/knowledge/bases/${kbId}/permissions/${userId}`),
+};
+
+// 管理端（审计日志等）
+export const adminApi = {
+  getAuditLogs: (params: {
+    page?: number;
+    page_size?: number;
+    action?: string;
+    username?: string;
+    days?: number;
+  }) => api.get('/api/admin/audit-logs', { params }),
+  getAuditActions: () => api.get('/api/admin/audit-logs/actions'),
 };
 
 export default api;

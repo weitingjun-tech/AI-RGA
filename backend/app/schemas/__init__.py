@@ -19,6 +19,15 @@ class ChangePassword(BaseModel):
     new_password: str = Field(..., min_length=6, max_length=100)
 
 
+class RefreshRequest(BaseModel):
+    """刷新令牌请求。
+
+    放在请求体而不是 query string —— query 会被 nginx access log、
+    浏览器历史、Referer 头记录，等于把长期有效的 refresh token 到处撒。
+    """
+    refresh_token: str = Field(..., min_length=10)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -143,3 +152,10 @@ class KnowledgeBaseResponse(BaseModel):
 class KnowledgeBaseList(BaseModel):
     bases: list[KnowledgeBaseResponse]
     total: int
+
+
+class KbPermissionGrant(BaseModel):
+    """授予某用户对某知识库的访问权限"""
+    user_id: int
+    # read  = 可检索；write = 额外可上传/删除该库文档
+    permission: str = Field("read", pattern="^(read|write)$")

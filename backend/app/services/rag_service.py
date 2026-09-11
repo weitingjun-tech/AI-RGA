@@ -342,17 +342,44 @@ def retrieve(
 
     Args:
         collection_names: 要检索的知识库集合名列表。
-            - 传入具体集合名 → 只在该知识库内检索（知识库隔离）
-            - 传 None 或空列表 → 检索全部知识库
+            - 传具体集合名 → 只在这些知识库里检索（知识库隔离）
+            - 传 **None** → 检索全部知识库
+            - 传 **空列表 []** → 什么都不检索，返回空结果
+
+    注意 None 和 [] 的语义**必须区分开**：
+    历史实现写的是 `collection_names or list_collection_names()`，
+    空列表会被当成 falsy 而退化成"检索全部"——当上层因为权限不足
+    把集合列表清空时，这恰恰变成了**权限绕过**：本该什么都查不到的用户，
+    反而查到了所有知识库。所以这里必须用 `is None` 判断。
 
     返回结果中的 "trace" 键记录了本次检索的完整明细
     （两路召回候选、融合数量、去冗数量、耗时），供落库与问题归因。
     """
     t0 = time.time()
+    if collection_names is not None and not collection_names:
+        # 明确要求检索"零个知识库"（通常是权限过滤的结果），直接返回空
+        return {
+            "documents": [[]],
+            "metadatas": [[]],
+            "distances": [[]],
+            "chunk_ids": [[]],
+            "trace": {
+                "query": query,
+                "collection_names": [],
+                "vector_hits": [],
+                "bm25_hits": [],
+                "fused_count": 0,
+                "dedup_removed": 0,
+                "final_count": 0,
+                "final_chunk_ids": [],
+                "latency_ms": 0,
+            },
+        }
+
     embedding_model = get_embedding_model()
     query_embedding = embedding_model.embed_query(query)
 
-    names = collection_names or list_collection_names()
+    names = list_collection_names() if collection_names is None else collection_names
 
     all_cands: list[dict] = []
     vector_hits_all: list[dict] = []
@@ -413,8 +440,12 @@ def retrieve_cached(
     top_k: int = RETRIEVAL_TOP_K,
     collections: Optional[tuple] = None,
 ) -> dict:
-    """带缓存的向量检索（collections 用元组以保证可哈希）"""
-    return retrieve(query, top_k, list(collections) if collections else None)
+    """带缓存的向量检索（collections 用元组以保证可哈希）。
+
+    None = 全部知识库；空元组 () = 什么都不检索。
+    两者是不同的缓存键，不能混为一谈（混了会导致权限绕过或跨用户串结果）。
+    """
+    return retrieve(query, top_k, list(collections) if collections is not None else None)
 
 
 def search_knowledge(
@@ -427,7 +458,9 @@ def search_knowledge(
     Returns:
         (拼接好的上下文文本, 引用来源列表, 检索过程明细 trace)
     """
-    results = retrieve_cached(query, top_k, tuple(collection_names) if collection_names else None)
+    results = retrieve_cached(
+        query, top_k, tuple(collection_names) if collection_names is not None else None
+    )
     context, sources = build_context_from_results(results)
     return context, sources, results.get("trace", {})
 

@@ -1,6 +1,6 @@
 // RAG 知识库问答系统 - 问答主页面（现代企业级 UI）
 import { useEffect, useRef, useState } from 'react';
-import { Button, Select, Tooltip } from 'antd';
+import { Alert, Button, Select, Tooltip } from 'antd';
 import {
   SendOutlined,
   PlusOutlined,
@@ -171,6 +171,20 @@ export default function Chat() {
             <UserMenu />
           </div>
         </header>
+
+        {/* 无可用知识库时的明确提示。
+            没有它的话，用户提问会得到一个空回答，看起来像系统坏了——
+            实际上只是尚未被授权任何知识库。 */}
+        {bases.length === 0 && (
+          <div style={{ padding: '10px 20px 0' }}>
+            <Alert
+              type="warning"
+              showIcon
+              message="你当前没有可访问的知识库"
+              description="请联系管理员为你分配知识库权限后再提问。若你已是管理员，请先到「知识库管理」上传文档。"
+            />
+          </div>
+        )}
 
         {/* 消息区域 */}
         <div

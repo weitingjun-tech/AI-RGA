@@ -1,18 +1,19 @@
 // RAG 知识库问答系统 - 管理后台 Dashboard（概览 / 知识库 / 用户）
 import { useState, useEffect } from 'react';
 import { Layout, Menu, Typography, Button, Space, Statistic, Row, Col, Card, Spin } from 'antd';
-import { ArrowLeftOutlined, DashboardOutlined, DatabaseOutlined, TeamOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DashboardOutlined, DatabaseOutlined, TeamOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { UserMenu } from '../../components/UserMenu';
 import KbManage from './KbManage';
 import UsersManage from './UsersManage';
+import AuditLogs from './AuditLogs';
 import { knowledgeApi } from '../../services/api';
 
 const { Header, Sider, Content } = Layout;
 const { Text, Title } = Typography;
 
-type ViewKey = 'overview' | 'kb' | 'users';
+type ViewKey = 'overview' | 'kb' | 'users' | 'audit';
 
 export default function Dashboard() {
   const [collapsed, setCollapsed] = useState(false);
@@ -31,6 +32,7 @@ export default function Dashboard() {
     { key: 'overview', icon: <DashboardOutlined />, label: '系统概览' },
     { key: 'kb', icon: <DatabaseOutlined />, label: '知识库管理' },
     { key: 'users', icon: <TeamOutlined />, label: '用户管理' },
+    { key: 'audit', icon: <FileSearchOutlined />, label: '审计日志' },
   ];
 
   const statCards = stats ? [
@@ -109,6 +111,7 @@ export default function Dashboard() {
           )}
           {view === 'kb' && <KbManage />}
           {view === 'users' && <UsersManage />}
+          {view === 'audit' && <AuditLogs />}
         </Content>
       </Layout>
     </Layout>

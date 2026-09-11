@@ -194,99 +194,117 @@ def resolve_collection_name(db: Session, kb_id: Optional[int]) -> str:
     return kb.collection_name if kb else CHROMA_COLLECTION_NAME
 
 
+class PermanentProcessingError(Exception):
+    """重试也不会成功的失败（文件格式不支持、解析出来是空的等）。
+
+    与临时性错误（网络抖动、模型加载失败）区分开：前者应立即放弃并标记失败，
+    后者才值得重试。不加区分地重试只会浪费算力并让用户多等 3 倍时间。
+    """
+
+
 def process_document(db: Session, doc_id: int, file_path: str, filename: str) -> None:
-    """处理上传的文档：解析 → 分块 → 向量化 → 存入 ChromaDB"""
+    """处理上传的文档：解析 → 分块 → 向量化 → 存入 ChromaDB。
+
+    **幂等**：开头会先清掉该文档已有的向量，因此同一个 doc_id 重复执行
+    不会产生重复分块。这一点对重试机制是必需的——worker 崩溃后任务会被
+    重新投递并再跑一遍，不幂等的话知识库里就会出现两份相同内容，
+    检索时 Top-K 会被同一段文字占满。
+
+    出错时直接抛出，由调用方决定是重试还是标记失败（不在本函数内改状态）。
+    """
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
         return
 
+    # 1. 选择加载器
+    ext = Path(filename).suffix.lower()
+    loader_cls = LOADER_MAP.get(ext)
+    if not loader_cls:
+        raise PermanentProcessingError(f"不支持的文件类型: {ext}")
+
+    # 2. 加载文档（文本类文件统一使用 UTF-8 编码，避免 Windows GBK 问题）
+    if ext in (".csv", ".txt", ".md"):
+        loader = loader_cls(file_path, encoding="utf-8")
+    else:
+        loader = loader_cls(file_path)
+    docs = loader.load()
+
+    if not docs:
+        # 常见于扫描件 PDF：没有文字层，纯文本抽取拿不到任何内容
+        raise PermanentProcessingError(
+            "文档未解析出任何文本内容（若为扫描件 PDF，需要 OCR 支持）"
+        )
+
+    # 3. 分块
+    splitter = get_text_splitter()
+    chunks = splitter.split_documents(docs)
+
+    # 4. 向量化 + 入库（写入该文档所属知识库对应的独立集合）
+    embedding_model = get_embedding_model()
+    collection = get_collection(resolve_collection_name(db, doc.kb_id))
+
+    # 幂等保障：先清掉这个文档可能已存在的旧向量，再写入新的
+    _delete_chunks_of_document(collection, doc_id)
+
+    texts = [chunk.page_content for chunk in chunks]
+    ids = [f"doc_{doc_id}_chunk_{i}" for i in range(len(texts))]
+    metadatas = [
+        {
+            "doc_id": doc_id,
+            "doc_name": filename,
+            "chunk_index": i,
+            "kb_id": doc.kb_id,
+            "source": chunks[i].metadata.get("source", filename),
+        }
+        for i in range(len(texts))
+    ]
+
+    # 批量嵌入并存入
+    embeddings = embedding_model.embed_documents(texts)
+    collection.add(
+        ids=ids,
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=metadatas,
+    )
+
+    # 5. 更新数据库状态
+    doc.status = "ready"
+    doc.chunk_count = len(chunks)
+    db.commit()
+
+    # 6. 语料已变更，清空检索缓存，避免返回过期结果
+    cleared = clear_cache()
+    logger.info(
+        f"文档处理完成 doc_id={doc_id} chunks={len(chunks)} "
+        f"collection={collection.name} 清理检索缓存={cleared} 条"
+    )
+
+
+def _delete_chunks_of_document(collection, doc_id: int) -> None:
+    """删除某文档在指定集合中的所有分块。幂等操作，不存在时静默返回。"""
     try:
-        # 1. 选择加载器
-        ext = Path(filename).suffix.lower()
-        loader_cls = LOADER_MAP.get(ext)
-        if not loader_cls:
-            doc.status = "error"
-            db.commit()
+        results = collection.get(where={"doc_id": doc_id})
+        if results and results.get("ids"):
+            collection.delete(ids=results["ids"])
             return
-
-        # 2. 加载文档（文本类文件统一使用 UTF-8 编码，避免 Windows GBK 问题）
-        if ext in (".csv", ".txt", ".md"):
-            loader = loader_cls(file_path, encoding="utf-8")
-        else:
-            loader = loader_cls(file_path)
-        docs = loader.load()
-
-        if not docs:
-            doc.status = "error"
-            db.commit()
-            return
-
-        # 3. 分块
-        splitter = get_text_splitter()
-        chunks = splitter.split_documents(docs)
-
-        # 4. 向量化 + 入库（写入该文档所属知识库对应的独立集合）
-        embedding_model = get_embedding_model()
-        collection = get_collection(resolve_collection_name(db, doc.kb_id))
-
-        texts = [chunk.page_content for chunk in chunks]
-        ids = [f"doc_{doc_id}_chunk_{i}" for i in range(len(texts))]
-        metadatas = [
-            {
-                "doc_id": doc_id,
-                "doc_name": filename,
-                "chunk_index": i,
-                "source": chunks[i].metadata.get("source", filename),
-            }
-            for i in range(len(texts))
-        ]
-
-        # 批量嵌入并存入
-        embeddings = embedding_model.embed_documents(texts)
-        collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-        )
-
-        # 5. 更新数据库状态
-        doc.status = "ready"
-        doc.chunk_count = len(chunks)
-        db.commit()
-
-        # 6. 语料已变更，清空检索缓存，避免返回过期结果
-        cleared = clear_cache()
-        logger.info(
-            f"文档处理完成 doc_id={doc_id} chunks={len(chunks)} "
-            f"collection={collection.name} 清理检索缓存={cleared} 条"
-        )
-
-    except Exception as e:
-        doc.status = "error"
-        db.commit()
-        raise e
+    except Exception:
+        pass
+    # 兜底：metadata 过滤不可用时按 ID 前缀找
+    try:
+        all_data = collection.get()
+        ids_to_delete = [i for i in all_data.get("ids", []) if i.startswith(f"doc_{doc_id}_")]
+        if ids_to_delete:
+            collection.delete(ids=ids_to_delete)
+    except Exception as exc:
+        logger.warning(f"清理文档旧向量失败 doc_id={doc_id}: {exc}")
 
 
 def delete_document_from_chroma(db: Session, doc_id: int) -> None:
     """从文档所属知识库的集合中删除该文档的所有分块"""
     doc = db.query(Document).filter(Document.id == doc_id).first()
     collection = get_collection(resolve_collection_name(db, doc.kb_id if doc else None))
-    try:
-        # 按 metadata 过滤删除
-        results = collection.get(where={"doc_id": doc_id})
-        if results and results["ids"]:
-            collection.delete(ids=results["ids"])
-    except Exception:
-        # ChromaDB 0.5 删除方式可能有差异，尝试 ID 前缀删除
-        try:
-            # 获取所有以 doc_{id}_ 开头的 chunk
-            all_data = collection.get()
-            ids_to_delete = [i for i in all_data["ids"] if i.startswith(f"doc_{doc_id}_")]
-            if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
-        except Exception:
-            pass
+    _delete_chunks_of_document(collection, doc_id)
 
     # 语料已变更，清空检索缓存，避免用户继续看到引用已删除文档的答案
     cleared = clear_cache()

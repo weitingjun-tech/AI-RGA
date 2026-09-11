@@ -85,7 +85,8 @@ export interface Document {
   file_type: string;
   file_size: number;
   chunk_count: number;
-  status: 'processing' | 'ready' | 'error';
+  // queued = 已入队等待 worker；processing = worker 正在处理
+  status: 'queued' | 'processing' | 'ready' | 'error';
   uploaded_by: number;
   kb_id?: number | null;
   created_at: string;

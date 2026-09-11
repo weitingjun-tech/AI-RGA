@@ -9,6 +9,7 @@ import {
   FilePdfOutlined, FileTextOutlined, FileExcelOutlined,
   FileMarkdownOutlined, CheckCircleOutlined, SyncOutlined,
   CloseCircleOutlined, PlusOutlined, DatabaseOutlined,
+  ClockCircleOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { knowledgeApi } from '../../services/api';
@@ -39,6 +40,18 @@ export default function KbManage() {
   // 多知识库
   const [bases, setBases] = useState<KnowledgeBase[]>([]);
   const [selectedKb, setSelectedKb] = useState<number | undefined>(undefined);
+
+  // ---- 知识库授权（ACL）----
+  const [permOpen, setPermOpen] = useState(false);
+  const [permLoading, setPermLoading] = useState(false);
+  const [permList, setPermList] = useState<
+    { user_id: number; username: string; permission: string }[]
+  >([]);
+  const [allUsers, setAllUsers] = useState<
+    { id: number; username: string; role: string }[]
+  >([]);
+  const [grantUserId, setGrantUserId] = useState<number | undefined>(undefined);
+  const [grantLevel, setGrantLevel] = useState<'read' | 'write'>('read');
   const [kbModalOpen, setKbModalOpen] = useState(false);
   const [newKbName, setNewKbName] = useState('');
   const [newKbDesc, setNewKbDesc] = useState('');
@@ -74,9 +87,11 @@ export default function KbManage() {
     if (selectedKb !== undefined) fetchDocs();
   }, [fetchDocs, selectedKb]);
 
-  // 自动轮询：存在"处理中"的文档时每 3 秒刷新一次状态
+  // 自动轮询：存在未完成（排队中/处理中）的文档时每 3 秒刷新一次状态
   useEffect(() => {
-    const hasProcessing = docs.some((d) => d.status === 'processing');
+    const hasProcessing = docs.some(
+      (d) => d.status === 'processing' || d.status === 'queued'
+    );
     if (!hasProcessing) return;
     const timer = setInterval(fetchDocs, 3000);
     return () => clearInterval(timer);
@@ -183,6 +198,10 @@ export default function KbManage() {
       width: 100,
       render: (status: string) => {
         const config: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
+          // queued 与 processing 分开显示：批量上传时能一眼看出
+          // "任务在排队"（等 worker）还是"正在跑"（worker 在处理），
+          // 两者对应的处理动作完全不同（前者加 worker，后者查为什么这么慢）
+          queued: { color: 'default', icon: <ClockCircleOutlined />, text: '排队中' },
           ready: { color: 'success', icon: <CheckCircleOutlined />, text: '就绪' },
           processing: { color: 'processing', icon: <SyncOutlined spin />, text: '处理中' },
           error: { color: 'error', icon: <CloseCircleOutlined />, text: '失败' },
@@ -209,7 +228,7 @@ export default function KbManage() {
             size="small"
             icon={<ReloadOutlined />}
             onClick={() => handleReindex(record.id)}
-            disabled={record.status === 'processing'}
+            disabled={record.status === 'processing' || record.status === 'queued'}
           >
             重新索引
           </Button>
@@ -230,6 +249,71 @@ export default function KbManage() {
 
   const currentKb = bases.find((b) => b.id === selectedKb);
 
+  // ---- 授权相关操作 ----
+  const loadPermissions = useCallback(async (kbId: number) => {
+    setPermLoading(true);
+    try {
+      // 两个请求互不依赖，并发发出，少一次往返
+      const [permRes, userRes] = await Promise.all([
+        knowledgeApi.listPermissions(kbId),
+        knowledgeApi.getUsers(),
+      ]);
+      setPermList(permRes.data.permissions);
+      // 管理员本来就拥有全部权限，不参与授权名单，所以从可选用户里剔除
+      setAllUsers(
+        (userRes.data.users as { id: number; username: string; role: string }[]).filter(
+          (u) => u.role !== 'admin'
+        )
+      );
+    } catch {
+      message.error('加载授权信息失败');
+    } finally {
+      setPermLoading(false);
+    }
+  }, []);
+
+  const openPermModal = () => {
+    if (selectedKb === undefined) {
+      message.warning('请先选择知识库');
+      return;
+    }
+    setGrantUserId(undefined);
+    setGrantLevel('read');
+    setPermOpen(true);
+    loadPermissions(selectedKb);
+  };
+
+  const handleGrant = async () => {
+    if (selectedKb === undefined || grantUserId === undefined) {
+      message.warning('请选择要授权的用户');
+      return;
+    }
+    try {
+      await knowledgeApi.grantPermission(selectedKb, grantUserId, grantLevel);
+      message.success('授权成功');
+      setGrantUserId(undefined);
+      await loadPermissions(selectedKb);
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || '授权失败');
+    }
+  };
+
+  const handleRevoke = async (userId: number) => {
+    if (selectedKb === undefined) return;
+    try {
+      await knowledgeApi.revokePermission(selectedKb, userId);
+      message.success('已撤销授权');
+      await loadPermissions(selectedKb);
+    } catch {
+      message.error('撤销失败');
+    }
+  };
+
+  // 已在名单里的用户不再出现在下拉框里，避免重复授权产生困惑
+  const grantableUsers = allUsers.filter(
+    (u) => !permList.some((p) => p.user_id === u.id)
+  );
+
   return (
     <Card
       title={<Title level={4} style={{ margin: 0 }}>📁 知识库文档管理</Title>}
@@ -246,6 +330,9 @@ export default function KbManage() {
               label: `${b.name}（${b.doc_count} 文档 / ${b.chunk_count} 分块）`,
             }))}
           />
+          <Button icon={<TeamOutlined />} onClick={openPermModal}>
+            授权管理
+          </Button>
           <Button icon={<PlusOutlined />} onClick={() => setKbModalOpen(true)}>
             新建知识库
           </Button>
@@ -309,6 +396,84 @@ export default function KbManage() {
             每个知识库对应一个独立的向量集合，检索时互不干扰。
           </Typography.Text>
         </Space>
+      </Modal>
+
+      <Modal
+        title={`🔐 授权管理 — ${currentKb?.name ?? ''}`}
+        open={permOpen}
+        onCancel={() => setPermOpen(false)}
+        footer={null}
+        width={620}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="权限在检索前生效"
+          description="未被授权的用户检索不到该知识库的任何内容，也无法在列表中看到它。管理员始终拥有全部权限。"
+        />
+
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Select
+            style={{ width: 220 }}
+            placeholder="选择用户"
+            value={grantUserId}
+            onChange={setGrantUserId}
+            showSearch
+            optionFilterProp="label"
+            options={grantableUsers.map((u) => ({ value: u.id, label: u.username }))}
+          />
+          <Select
+            style={{ width: 130 }}
+            value={grantLevel}
+            onChange={setGrantLevel}
+            options={[
+              { value: 'read', label: '只读（可检索）' },
+              { value: 'write', label: '读写（可上传）' },
+            ]}
+          />
+          <Button type="primary" onClick={handleGrant} disabled={!grantUserId}>
+            授权
+          </Button>
+        </Space>
+
+        <Table
+          size="small"
+          rowKey="user_id"
+          loading={permLoading}
+          dataSource={permList}
+          pagination={false}
+          locale={{ emptyText: '尚未授权任何用户（仅管理员可访问）' }}
+          columns={[
+            { title: '用户', dataIndex: 'username' },
+            {
+              title: '权限',
+              dataIndex: 'permission',
+              width: 110,
+              render: (p: string) => (
+                <Tag color={p === 'write' ? 'blue' : 'default'}>
+                  {p === 'write' ? '读写' : '只读'}
+                </Tag>
+              ),
+            },
+            {
+              title: '操作',
+              width: 90,
+              render: (_: unknown, r: { user_id: number; username: string }) => (
+                <Popconfirm
+                  title={`确认撤销 ${r.username} 的访问权限？`}
+                  onConfirm={() => handleRevoke(r.user_id)}
+                  okText="撤销"
+                  cancelText="取消"
+                >
+                  <Button type="link" size="small" danger>
+                    撤销
+                  </Button>
+                </Popconfirm>
+              ),
+            },
+          ]}
+        />
       </Modal>
     </Card>
   );
