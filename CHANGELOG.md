@@ -26,6 +26,35 @@
 
 ---
 
+## [未发布]
+
+### ✨ 新增
+- **Redis 便携版部署**：本机已装 `D:\tools\redis`（免安装、无需管理员权限）。
+  配置开启了 **AOF 持久化**——这里存的是任务队列而非缓存，
+  默认的 RDB 周期快照会丢最近几秒数据，对队列意味着"上传的文档凭空消失"
+- **Celery 完整链路实测通过**（补上 v1.1.0 中"未实测"的一项）：
+  上传返回 `queue_mode=celery`，状态流转 `queued → processing → ready`，
+  worker 日志与 Redis 中的 `celery-task-meta-*` 键均确认任务确实经过 broker
+
+### 🏗️ 工程
+- 新增 `scripts/start-redis.bat`、`scripts/start-celery.bat`（含 Redis 可达性预检）
+- 新增 `DOCKER_SETUP.md`：Docker 部署准备清单，标注每步「谁执行」与预期问题
+- `/run` skill 更新为**四进程架构**（Redis → Celery worker → 后端 → 前端）：
+  - 新增 Redis / worker 的启动与验证步骤
+  - 健康检查改用 `/api/health/ready`（逐项探测依赖），不再用 `/docs`
+  - 冒烟测试新增 `queue_mode` 判定与 `queued` 状态说明
+  - 排障表补充 Redis / 限流 / 锁定 / ACL / 迁移条目
+  - **修正停止流程**：明确禁止 `taskkill /IM python.exe /F` 这类按进程名批量杀
+    （会误杀机器上所有 Python 程序）
+
+### ⚠️ 已知局限
+- **Docker 仍未部署**：本机为 Windows 11 家庭版，Docker Desktop 只能走 WSL2 后端，
+  而启用 WSL2 需要管理员权限 + **重启电脑**。步骤已完整写在 `DOCKER_SETUP.md`
+- Docker Hub（`registry-1.docker.io`）在本网络下不可达，
+  部署前**必须**先配镜像加速，否则 `docker compose up` 会卡在拉镜像
+
+---
+
 ## [v1.1.0] - 2026-09-11
 
 企业级落地加固：补齐**权限、可靠性、迁移、合规**四块工程短板。
