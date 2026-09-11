@@ -21,45 +21,32 @@
 | rag-ollama | ✅ healthy(含 qwen2.5:7b) |
 | rag-worker | ✅ healthy(Celery ping 通过) |
 
-### ⚠️ 两处临时变通(网络恢复后应回归)
+### ✅ 部署方式:标准编排,无任何变通
 
-**1. Redis 用的是宿主机实例**
-
-`redis:7-alpine` 拉不下来 —— 镜像站 daocloud 的 CDN 主机
-`image-mirror.r2.daocloud.vip` 完全不可达(两个 IP 都返回 HTTP 000),
-测试的 8 个其它公共镜像站也全部被阻断(南大镜像站返回 403,需校园网)。
-
-临时方案:用 `docker-compose.workarounds.yml` 把 backend / worker 指向宿主机的 Redis。
+网络已恢复(`redis:7-alpine` / `nginx:alpine` / `node:22-alpine` 均可拉取),
+因此先前为绕开镜像封锁而引入的 `docker-compose.workarounds.yml` **已删除**。
 
 ```bash
-# 当前用法
-docker compose -f docker-compose.yml -f docker-compose.workarounds.yml up -d
-
-# 网络恢复后,回归标准部署
-docker compose up -d
+docker compose up -d          # 就这一条,不需要额外的 -f 参数
 ```
 
-**2. backend 镜像是在旧镜像上加补丁层构建的**
+六个服务全部自包含,并都带 `restart: unless-stopped` ——
+**Docker Desktop 启动时会自动拉起,崩溃也会自动重启**,不需要手工干预。
 
-`download.pytorch.org` 在部署中途被阻断(SSL `UNEXPECTED_EOF`),
-无法完整重建。缺的只有 `beautifulsoup4`(只依赖可用的 PyPI 镜像),
-所以在旧镜像上补了一层。
+| 服务 | 说明 |
+|------|------|
+| mysql | 数据库(宿主端口 3307) |
+| redis | 任务队列 broker(AOF 持久化,**不对外暴露端口**) |
+| ollama | LLM 推理 |
+| backend | FastAPI(宿主端口 8000) |
+| worker | Celery 文档处理 |
+| frontend | nginx 静态站(宿主端口 5174) |
 
-```bash
-# 网络恢复后重建正常镜像
-docker compose build backend
-docker rmi rag-backend:base        # 补丁的基础层,确认重建成功后可删
-```
-
-**3. Ollama 模型靠复制而非拉取**
-
-`registry.ollama.ai` 被阻断,`qwen2.5:7b` 无法在容器内拉取。
-做法是把宿主机已有的模型文件直接复制进容器:
-
-```bash
-docker cp "C:/Users/lizhi3/.ollama/models/." rag-ollama:/root/.ollama/models/
-docker exec rag-ollama ollama list     # 应看到 qwen2.5:7b
-```
+> **为什么删掉变通文件而不是留着**:那份配置是为"镜像拉不下来"临时写的,
+> 现在不再需要。留着的坏处是——它会被后来的人当成有效配置去用,
+> 反而掩盖真实状态。这类"死配置"正是本项目早前清理过的问题
+> (原 `docker-compose.yml` 里那个从未被连接的 chroma 服务)。
+> 相关经验保留在本文档中,需要时可按记录重建。
 
 ---
 

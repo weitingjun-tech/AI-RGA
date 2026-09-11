@@ -324,19 +324,37 @@
 
 ### ⚠️ 已知局限
 
-**Docker 部署中的两处临时变通（需在网络恢复后回归）**
-- **Redis 用的是宿主机实例，不是容器**：镜像加速站 daocloud 的 CDN 主机
-  `image-mirror.r2.daocloud.vip` 在部署期间完全不可达（两个 IP 均返回 HTTP 000），
-  而测试的 8 个其它公共镜像站全部被阻断，`redis:7-alpine` 始终拉不下来。
-  临时改用 `docker-compose.workarounds.yml` 把 backend/worker 指向宿主机的 Redis。
-  **网络恢复后执行 `docker compose up -d`（不带 `-f`）即可回归纯容器部署**
-- **backend 镜像是在旧镜像上加补丁层构建的**：`download.pytorch.org` 在部署中途
-  也被阻断（SSL `UNEXPECTED_EOF`），无法完整重建。缺的只有 `beautifulsoup4`
-  （只依赖可用的 PyPI 镜像），因此在其上补了一层。
-  **网络恢复后执行 `docker compose build backend` 即得到正常镜像**
-- 遗留标签 `rag-backend:base` 是补丁的基础层，确认重建成功后可删除
-- 另外还有一处环境限制：`registry.ollama.ai` 被阻断，`qwen2.5:7b` 无法在容器内拉取，
-  实现方式是**把宿主机已有的 4.4GB 模型文件直接复制进容器**
+**部署过程中曾用过、现已消除的三处变通（留档备查）**
+
+部署期间网络**持续收紧**：先是 `registry-1.docker.io`，接着 daocloud 的 CDN
+`image-mirror.r2.daocloud.vip`，再是 `registry.ollama.ai`，
+最后连 `download.pytorch.org` 也被 SSL 阻断。期间不得不采用三处变通：
+
+1. **Redis 用宿主机实例**（`redis:7-alpine` 拉不到）
+2. **backend 镜像加补丁层**（`download.pytorch.org` 被阻断，无法完整重建，
+   缺的只有 `beautifulsoup4`，在其上补了一层）
+3. **Ollama 模型靠从宿主机复制**（`registry.ollama.ai` 被阻断）
+
+**网络恢复后已全部回归标准部署**：验证 `redis:7-alpine`、`nginx:alpine`、
+`node:22-alpine` 均可拉取，于是
+
+- 删除 `docker-compose.workarounds.yml`，改回 `docker compose up -d`
+- worker 连的不再是 `host.docker.internal:6379`，而是容器内的 `redis://redis:6379/0`
+- 六个容器全部自包含，且统一带 `restart: unless-stopped`
+  —— **Docker Desktop 启动时自动拉起、崩溃自动重启**，不再依赖任何宿主机进程
+
+> 删除变通文件而不是保留，是为了避免"死配置"——它会被后来的人当成有效配置去用。
+> 这与早前清理掉的、从未被连接过的 `chroma` 服务是同一类问题。
+> 相关经验保留在 `DOCKER_SETUP.md` 中，需要时可按记录重建。
+
+**另一个暴露出来的问题：服务启动方式不可持续**
+- **现象**：几小时后用户反馈"登录不了"，检查发现 5 个服务全都没在跑
+- **根因**：开发阶段我用**会话内的后台任务**启动 Redis 与 Ollama，
+  这些进程挂在 shell 下，会话一结束就被回收。用户并没有做错任何事
+- **影响**：服务会在无人察觉时静默消失，且没有任何报错
+- **修复**：Docker 化后由 `restart: unless-stopped` 接管生命周期；
+  本地非 Docker 场景则用 `scripts/start-all.bat`（`start` 命令开独立窗口，
+  不依赖调用方会话）
 
 **其它未实测部分**
 - Celery 的失败重试与启动对账逻辑**未做故障注入测试**：
