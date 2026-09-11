@@ -1,17 +1,91 @@
-# /run — Launch the RAG Knowledge Base System
+# /run — 启动 RAG 知识库问答系统
 
-This skill covers starting the **full stack** — Redis (task broker), Celery worker (document
-processing), backend (FastAPI, port 8000), and frontend (Vite, port 5173) — verifying they are
-healthy, and optionally running an end-to-end smoke test.
+## 第一步：决定用哪种方式启动
 
-## Prerequisites
+| | 🐳 Docker | 💻 本地开发 |
+|---|---|---|
+| **适合** | 演示、交付、想省事 | 改代码（热更新） |
+| **命令** | `docker compose up -d` | `scripts\start-all.bat` |
+| **地址** | http://localhost:**5174** | http://localhost:**5173** |
+| **依赖** | 只需 Docker Desktop 在跑 | 需 MySQL / Redis / Ollama / Python / Node 全就绪 |
+| **改代码** | 需 `--build` 重建才生效 | 保存即生效 |
 
-| Requirement | How to check | Required? |
+**默认优先用 Docker**：它把所有依赖打包在容器里，且带 `restart: unless-stopped`
+（Docker Desktop 开着服务就在，崩溃自动重启），不会出现"服务静默消失但没人知道"。
+
+**例外**：用户明确说要改代码时用本地方式。
+
+> ⚠️ **两种方式端口不同是故意的**（5174 vs 5173），可同时跑、互不冲突。
+> 也正因如此，**报告地址前必须确认用户问的是哪一种** ——
+> 说错端口会让用户以为系统坏了，而实际上只是打开了另一个前端。
+
+---
+
+## 方式一：Docker（优先）
+
+```bash
+cd d:/mydo
+docker compose ps                      # 先看是否已经在跑
+docker compose up -d                   # 没跑就启动
+```
+
+**等待并验证全部 healthy**。`starting` 状态不算就绪，**别急着报告成功**：
+
+```bash
+docker compose ps --format "  {{.Name}}  {{.Status}}"
+```
+
+期望六个服务全部 `Up ... (healthy)`：
+`rag-mysql` / `rag-redis` / `rag-ollama` / `rag-backend` / `rag-worker` / `rag-frontend`
+
+**就绪探针**（比 healthy 更能反映真实可用性，它会逐项探测依赖）：
+
+```bash
+curl -s http://localhost:8000/api/health/ready
+# 期望 {"status":"ok","checks":{"mysql":"ok","chroma":"ok","upload_dir":"ok"}}
+```
+
+**模型**（仅首次需要）：
+
+```bash
+docker exec rag-ollama ollama list              # 先看有没有
+docker exec rag-ollama ollama pull qwen2.5:7b   # 没有才拉
+```
+
+### ⚠️ 报告地址前必做的一步
+
+**光验证后端接口不够。** 曾经发生过：接口全部 200、容器全部 healthy，
+但用户在浏览器里点登录毫无反应 —— 原因是改了前端端口却没同步 CORS 白名单，
+浏览器直接丢弃了响应，前端连错误都拿不到。
+
+所以 Docker 方式下必须额外验证**跨域**：
+
+```bash
+curl -s -i -X POST http://localhost:8000/api/auth/login \
+  -H "Origin: http://localhost:5174" -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' | grep -i "access-control-allow-origin"
+# 必须出现 access-control-allow-origin: http://localhost:5174
+```
+
+没出现这一行 = 用户登录时一定失败，无论接口本身多正常。
+
+**报告给用户的地址是 http://localhost:5174**（不是 5173）。
+
+---
+
+## 方式二：本地开发
+
+启动顺序有依赖：**Redis → Celery worker → 后端 → 前端**。
+Celery worker 启动时会连 broker，Redis 没起来它会一直重试。
+
+### 前置条件
+
+| 依赖 | 检查方式 | 必须? |
 |---|---|---|
 | MySQL 8.0+ | `mysql -u root -p` | **必须** |
 | Ollama running | `curl -s http://localhost:11434/api/tags` | **必须**（生成回答） |
 | Python 3.11+ with venv | `./backend/venv/Scripts/python.exe --version` | **必须** |
-| Node.js 18+ | `node --version` | **必须**（前端） |
+| Node.js **22.12+** | `node --version` | **必须**（低于此版本 Vite 8 构建失败） |
 | Redis | `D:/tools/redis/redis-cli.exe ping` | 建议（见下） |
 
 ### Redis 是"建议"而非"必须"的原因
@@ -28,12 +102,25 @@ healthy, and optionally running an end-to-end smoke test.
 
 前四项必须满足才能启动。缺任何一项，报告是哪一项并停止。
 
-## Startup
+### ⚠️ 启动方式必须"独立于本会话"
 
-启动顺序有依赖：**Redis → Celery worker → 后端 → 前端**。
-Celery worker 启动时会连 broker，Redis 没起来它会一直重试。
+**这条踩过坑**：开发阶段曾用会话内的后台任务启动 Redis / Ollama，
+几小时后用户反馈"登录不了"——检查发现服务全没了。原因是那些进程挂在 shell 下，
+**会话一结束就被回收**，而且没有任何报错。
 
-### 0a. Start Redis（便携版，不需要管理员权限）
+所以本地方式一律用 `scripts\start-all.bat`（内部用 `start` 命令开**独立窗口**），
+不要用后台任务的方式启动常驻服务。
+
+---
+
+### 启动步骤
+
+**推荐：双击 `scripts\start-all.bat`** —— 一条命令拉起全部四个服务，
+自带前置检查和健康验证。
+
+手动逐个启动的话，顺序不能乱（**Redis → worker → 后端 → 前端**）：
+
+#### 0a. Start Redis（便携版，不需要管理员权限）
 
 ```bash
 cd /d/tools/redis && ./redis-server.exe redis-rag.conf

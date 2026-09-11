@@ -70,31 +70,137 @@
 
 ## 🚀 快速启动
 
+项目有两种跑法，**先看这张表选一种**：
+
+| | 🐳 Docker 方式 | 💻 本地开发方式 |
+|---|---|---|
+| **适合** | 部署、演示、交付 | 改代码（热更新） |
+| **前置依赖** | 只需 Docker Desktop | Python / Node / MySQL / Redis / Ollama 全都要装 |
+| **启动命令** | 一条 `docker compose up -d` | 双击 `scripts\start-all.bat` |
+| **访问地址** | **http://localhost:5174** | **http://localhost:5173** |
+| **改代码生效** | 需重新构建镜像 | 保存即生效 |
+
+> ⚠️ **两种方式端口不同是故意的**，这样它们可以同时跑、互不冲突。
+> 顺便也可以对照验证：同一份代码在两种环境下行为是否一致。
+
+---
+
+## 🐳 方式一：Docker（推荐）
+
+### 前置条件
+
+| 依赖 | 说明 |
+|------|------|
+| Docker Desktop | Windows 需开启 WSL2 后端。安装与排障见 [DOCKER_SETUP.md](DOCKER_SETUP.md) |
+
+其它依赖（MySQL / Redis / Ollama / Python / Node）**全部打包在容器里**，不需要在宿主机安装。
+
+### 1. 配置（仅首次）
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+然后生成一个真正的 JWT 密钥填进 `backend/.env` 的 `JWT_SECRET=`：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+> 这步**不能跳过**：`APP_ENV=production` 下如果 `JWT_SECRET` 未设置或仍是
+> 占位值，后端会**拒绝启动**。这是刻意的——默认密钥等于把管理员令牌的签发权公开。
+
+### 2. 启动
+
+```bash
+docker compose up -d
+docker compose ps          # 等六个服务全部变成 healthy
+```
+
+### 3. 拉取模型（仅首次）
+
+```bash
+docker exec rag-ollama ollama pull qwen2.5:7b
+```
+
+没有模型时系统能检索但无法生成回答。
+
+### 4. 访问
+
+**http://localhost:5174** · 账号 `admin` / `123456`
+
+### 首次启动要多久
+
+| 步骤 | 体积 | 说明 |
+|------|------|------|
+| 拉取基础镜像 | ~3 GB | mysql / redis / ollama / python / node / nginx |
+| 构建 backend 镜像 | ~200 MB | **torch 用 CPU 版**（CUDA 版是 2 GB+，容器没 GPU，纯属死重量） |
+| 拉取 qwen2.5:7b | ~4.7 GB | 第 3 步 |
+
+### 常用命令
+
+```bash
+docker compose ps                      # 状态（全部 healthy 才算正常）
+docker compose logs -f backend         # 跟踪某个服务日志
+docker compose restart backend         # 重启单个服务（改了 .env 后需要）
+docker compose up -d --build backend   # 改了后端代码后重建
+docker compose down                    # 停止（数据保留在卷里）
+docker compose down -v                 # 停止并删除数据（谨慎）
+```
+
+### 端口分配
+
+| 服务 | 宿主机端口 | 说明 |
+|------|-----------|------|
+| frontend | **5174** | 5173 留给本地 Vite |
+| backend | 8000 | |
+| mysql | **3307** | 3306 留给宿主机本地 MySQL |
+| ollama | 11434 | |
+| redis | **不暴露** | 无鉴权，只允许容器网络内访问 |
+
+---
+
+## 💻 方式二：本地开发
+
+适合改代码——Vite 和 uvicorn 都支持热更新，保存即生效。
+
 ### 前置条件
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
 | Python | 3.11+ | |
-| Node.js | 18+ | |
+| Node.js | **22.12+** | 低于此版本 Vite 8 会构建失败 |
 | MySQL | 8.0 | |
-| Redis | 7+ | 任务队列 broker（**不装也能跑，会自动降级**，见下） |
+| Redis | 7+ | 任务队列 broker（**不装也能跑**，见下） |
 | Ollama | 最新 | `ollama pull qwen2.5:7b` |
+
+Redis 本项目提供**免安装便携版**（不需要管理员权限、不注册系统服务）：
+
+```bash
+# 已放在 D:\tools\redis，直接双击 scripts\start-redis.bat 即可
+```
+
+> **没有 Redis 也能跑**：任务会自动降级为本地线程**并打印醒目告警**。
+> 该模式进程重启会丢任务，仅供本地开发，不要用于演示。
 
 ### 1. 配置
 
 ```bash
 cd backend
 cp .env.example .env
-# 生成一个真正的 JWT 密钥写进 .env（必做！默认占位值会被拒绝启动）
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+# 同样要生成 JWT_SECRET（开发环境留空会随机生成，但重启后需重新登录）
 ```
 
 ### 2. 安装依赖
 
 ```bash
+cd backend
 python -m venv venv
 .\venv\Scripts\activate          # Windows
 pip install -r requirements.txt
+
+cd ../frontend
+npm install
 ```
 
 ### 3. 建库
@@ -103,71 +209,83 @@ pip install -r requirements.txt
 CREATE DATABASE rag_knowledge_base CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-表结构由 Alembic 在启动时自动创建，无需手工建表。
+表结构由 Alembic 在启动时自动创建，**不需要手工建表**。
 
 ### 4. 启动
 
+**推荐：双击 `scripts\start-all.bat`** —— 一条命令拉起全部四个服务，
+自带前置检查和健康验证。
+
+它做的事（也可手动逐个启动）：
+
 ```bash
-# 终端 1：Redis（可选但强烈建议）
-docker run -d -p 6379:6379 --name rag-redis redis:7-alpine
+# ① Redis（先启动，worker 要连它）
+scripts\start-redis.bat
 
-# 终端 2：Celery worker（文档处理，独立进程）
+# ② Celery worker —— 文档处理，独立进程
 cd backend
-celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo
-#                                                          ^^^^^^^^^^^^
-#                              Windows 必须加 --pool=solo，否则与事件循环冲突报错
+venv\Scripts\python.exe -m celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo
+#                                                                               ^^^^^^^^^^^^
+#                            Windows 必须加 --pool=solo，否则与 asyncio 事件循环冲突会直接报错
 
-# 终端 3：后端
+# ③ 后端（等模型加载约 20-30 秒）
 cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# 终端 4：前端
+# ④ 前端
 cd frontend
-npm install && npm run dev
+npm run dev
 ```
 
-访问 `http://localhost:5173`。API 文档：`http://localhost:8000/docs`
+**启动顺序有依赖**，不能乱：Redis → worker → 后端 → 前端。
+worker 启动时会连 broker，后端启动时会连 MySQL 并执行数据库迁移。
 
-> **没有 Redis 也能跑**：任务会自动降级为本地线程并打印告警。
-> 该模式**进程重启会丢任务**，仅供本地开发。
+### 5. 访问
 
-### 5. 默认账号
+**http://localhost:5173** · API 文档 http://localhost:8000/docs
+
+---
+
+## 🔑 默认账号
 
 | 角色 | 用户名 | 密码 |
 |------|--------|------|
 | 管理员 | admin | 123456 |
 
-> ⚠️ 生产环境请在首次登录后立即修改密码。
+> ⚠️ **生产环境请在首次登录后立即修改密码。**
 
-### Docker 一键启动
+**注意**：系统启动只预置 `admin` 一个账号。自行注册的用户
+**默认没有任何知识库权限**（ACL 默认拒绝），需要管理员到
+「知识库管理 → 授权管理」里分配后才能检索。
+
+---
+
+## 🔍 起不来怎么办
+
+按顺序排查，多数问题在前两步就能定位：
 
 ```bash
-cp backend/.env.example backend/.env   # 并填入 JWT_SECRET
-docker compose up -d
-docker compose ps                      # 六个服务应全部为 healthy
+# 1. 服务到底在不在跑
+docker compose ps                                    # Docker 方式
+netstat -ano | findstr ":5174 :8000 :5173"           # 看端口有没有被监听
+
+# 2. 依赖是否健康（逐项探测 MySQL / Chroma / 上传目录）
+curl http://localhost:8000/api/health/ready
+#    期望 {"status":"ok","checks":{"mysql":"ok","chroma":"ok","upload_dir":"ok"}}
+
+# 3. 看日志
+docker compose logs --tail=50 backend                 # Docker 方式
 ```
 
-包含 mysql / redis / ollama / backend / worker / frontend 六个服务。
-
-**首次启动较慢**，原因与耗时：
-
-| 步骤 | 说明 |
-|------|------|
-| 拉取基础镜像 | mysql / redis / ollama / python / node / nginx，约 3 GB |
-| 构建 backend 镜像 | 含 torch（**用 CPU 版，约 200 MB 而非 CUDA 版的 2 GB+**），约 5-10 分钟 |
-| 拉取 qwen2.5:7b | 约 4.7 GB，`docker exec rag-ollama ollama pull qwen2.5:7b` |
-
-**端口分配**（刻意避开宿主机本地环境）：
-
-| 服务 | 宿主机端口 | 说明 |
-|------|-----------|------|
-| frontend | **5174** | 5173 通常被本地 Vite 占用 |
-| backend | 8000 | |
-| mysql | **3307** | 3306 通常被宿主机本地 MySQL 占用 |
-| ollama | 11434 | |
-| redis | 不对外暴露 | 无鉴权，只允许容器网络内访问 |
-
-> 完整的部署记录、踩坑与受限网络下的变通方案，见 [DOCKER_SETUP.md](DOCKER_SETUP.md)。
+| 现象 | 常见原因 |
+|------|---------|
+| 页面能开，但**点登录没反应** | CORS 白名单没含当前前端端口。改 `docker-compose.yml` 的 `CORS_ORIGINS` 后 `docker compose up -d backend` |
+| 登录返回 **429** | 触发了限流。等 1 分钟；频繁测试可调高 `RATE_LIMIT_LOGIN` |
+| 登录返回 429「账号已锁定」 | 同账号连错 5 次，等 15 分钟或清 Redis 的 `loginfail:*` |
+| 文档一直「**排队中**」 | Celery worker 没启动，或连不上 Redis |
+| 上传响应 `queue_mode: thread` | Redis 不可用，任务已降级（生产应设 `TASK_QUEUE_MODE=celery` 禁止降级） |
+| 用户看不到任何知识库 | ACL 默认拒绝，需管理员授权 |
+| 后端容器反复重启 | `JWT_SECRET` 没填，生产模式拒绝启动 |
 
 ---
 
