@@ -1,7 +1,106 @@
-# Docker 部署准备清单
+# Docker 部署
 
-> 本文档是**准备工作**,里面的命令**尚未执行**。
-> 每一步都标注了「谁来执行」——标着「你」的步骤我无法代劳(需要管理员权限或重启)。
+> ✅ **已完成部署并端到端验证通过**(2026-09-11)。
+> 五个容器全部 healthy,上传 → 队列 → 处理 → 检索 → 生成 全链路实测可用。
+>
+> ⚠️ 但有两处**环境受限导致的临时变通**,网络恢复后需要回归标准部署,
+> 详见下面的「实际部署结果」。
+
+---
+
+## 实际部署结果
+
+| 项目 | 状态 |
+|------|------|
+| Docker Desktop | ✅ 装在 `D:\Docker`,引擎 29.7.2 |
+| 数据目录 | ✅ `D:\DockerData`(C 盘只剩 13GB,必须放 D 盘) |
+| 镜像加速 | ✅ `daemon.json` 中 daocloud + 阿里云 |
+| rag-backend | ✅ healthy |
+| rag-frontend | ✅ healthy |
+| rag-mysql | ✅ healthy |
+| rag-ollama | ✅ healthy(含 qwen2.5:7b) |
+| rag-worker | ✅ healthy(Celery ping 通过) |
+
+### ⚠️ 两处临时变通(网络恢复后应回归)
+
+**1. Redis 用的是宿主机实例**
+
+`redis:7-alpine` 拉不下来 —— 镜像站 daocloud 的 CDN 主机
+`image-mirror.r2.daocloud.vip` 完全不可达(两个 IP 都返回 HTTP 000),
+测试的 8 个其它公共镜像站也全部被阻断(南大镜像站返回 403,需校园网)。
+
+临时方案:用 `docker-compose.workarounds.yml` 把 backend / worker 指向宿主机的 Redis。
+
+```bash
+# 当前用法
+docker compose -f docker-compose.yml -f docker-compose.workarounds.yml up -d
+
+# 网络恢复后,回归标准部署
+docker compose up -d
+```
+
+**2. backend 镜像是在旧镜像上加补丁层构建的**
+
+`download.pytorch.org` 在部署中途被阻断(SSL `UNEXPECTED_EOF`),
+无法完整重建。缺的只有 `beautifulsoup4`(只依赖可用的 PyPI 镜像),
+所以在旧镜像上补了一层。
+
+```bash
+# 网络恢复后重建正常镜像
+docker compose build backend
+docker rmi rag-backend:base        # 补丁的基础层,确认重建成功后可删
+```
+
+**3. Ollama 模型靠复制而非拉取**
+
+`registry.ollama.ai` 被阻断,`qwen2.5:7b` 无法在容器内拉取。
+做法是把宿主机已有的模型文件直接复制进容器:
+
+```bash
+docker cp "C:/Users/lizhi3/.ollama/models/." rag-ollama:/root/.ollama/models/
+docker exec rag-ollama ollama list     # 应看到 qwen2.5:7b
+```
+
+---
+
+## 部署过程记录(踩坑与解法)
+
+以下是在受限网络 + Windows 家庭版环境下实际遇到的问题。
+每一步都试过,**失败的尝试也记录下来**,避免重复踩。
+
+### ⚠️ Docker 数据目录只能通过 GUI 迁移
+
+我试过三种自动化方式,**全部失败**:
+
+| 尝试 | 结果 |
+|------|------|
+| `daemon.json` 写 `data-root` | ❌ Docker Desktop 忽略该字段 |
+| `settings-store.json` 写 `DataFolder` | ❌ 值被保留,但启动时仍在 C 盘重建发行版 |
+| `wsl --export/unregister/import` 手动迁移 | ❌ 一启动就被重新注册回 C 盘原路径 |
+
+**结论**:Docker Desktop 完全接管 WSL 发行版的位置,只有它自己的 GUI
+(`Settings → Resources → Advanced → Disk image location`)会触发正式迁移。
+
+### ⚠️ Linux 环境的包管理器全被阻断
+
+容器内 `apt-get update` 返回 502、`apk update` 报 TLS 错误,
+Debian / Alpine / PyPI 官方源均不可用。
+可用的是:阿里云 PyPI 镜像、`download.pytorch.org`(部署中途失效)。
+
+### ⚠️ 其它镜像源实测结果
+
+| 镜像源 | 结果 |
+|--------|------|
+| `docker.m.daocloud.io` | 注册表 API 可达(401),但 **blob CDN 不可达** |
+| `docker.nju.edu.cn` | 403,需校园网 |
+| 其余 7 个常见公共源 | 全部不可达 |
+
+---
+
+# 附:原始部署准备清单
+
+> 以下内容为部署**之前**准备的清单,保留作为参考。
+> 标着「需要你执行」的步骤需要管理员权限或重启,无法代劳。
 
 ---
 

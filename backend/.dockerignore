@@ -1,0 +1,32 @@
+# 构建上下文排除清单
+#
+# 没有这个文件时，Docker 会把整个 backend 目录（含 venv、向量库、上传文件）
+# 打包发给构建守护进程 —— 实测上下文达到 1.01GB，每次构建都要传输一遍。
+# 排除后降到几 MB。
+
+# Python 虚拟环境（容器里会重新装依赖，绝不能拷进去：
+# 宿主机是 Windows，venv 里全是 .exe/.pyd，拷进 Linux 容器完全不可用）
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 运行时数据（容器用自己的卷，见 docker-compose.yml）
+chroma_data/
+uploads/
+huggingface_cache/
+*.log
+
+# 敏感配置：.env 由 docker-compose 的 env_file 在**运行时**注入，
+# 烤进镜像会让密钥永久留在镜像层里，删都删不掉
+.env
+.env.local
+
+# 开发工具配置
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+alembic.ini.bak

@@ -51,10 +51,81 @@
   （Python 用 locale 编码读取配置文件，中文注释导致 UnicodeDecodeError）。
   **教训：配置文件与批处理脚本一律避开非 ASCII，或必须按目标编码写入**
 
+**2. `requirements.txt` 漏声明 `beautifulsoup4`（Docker 部署才暴露）**
+- **现象**：容器启动即崩溃 —— `ModuleNotFoundError: No module named 'bs4'`
+- **根因**：`kb_service.py` 用 `BeautifulSoup` 解析 EPUB 正文，但该包**没有任何其它依赖会引入它**
+  （`pip show beautifulsoup4` 的 `Required-by` 为空）。本地开发机上当初是手动装的，
+  所以从未写进 `requirements.txt`
+- **影响**：**任何一次干净部署都会失败**。这是典型的「本地能跑、交付即崩」——
+  本地环境的隐式状态掩盖了缺失的依赖声明
+- **修复**：显式声明 `beautifulsoup4==4.15.0` + `soupsieve==2.9.2`（连依赖一起锁版本）
+- **发现方式**：在容器内静态扫描全部 `import` 与已安装包做比对，确认只缺这一个
+
+**3. 前端容器健康检查恒为 unhealthy**
+- **现象**：`docker compose ps` 显示前端 `unhealthy`，但宿主机访问返回 200，服务是好的
+- **根因**：健康检查写的是 `localhost`，而容器内 `/etc/hosts` 把 `localhost` 解析到
+  IPv6 的 `::1`，nginx 只监听 IPv4 的 `0.0.0.0:5173`，于是 wget 被拒
+- **影响**：编排层无法正确判断服务状态；`--wait` 会失败，自动扩缩容会误判
+- **修复**：改用 `127.0.0.1`
+
+**4. Celery worker 容器恒为 unhealthy**
+- **现象**：worker 正常运行（日志显示 `Connected to redis://...` 并注册了任务），却报 unhealthy
+- **根因**：worker 与 backend **共用同一个镜像**，而镜像层的 `HEALTHCHECK` 探测的是
+  backend 的 HTTP 端点 `/api/health/ready` —— worker 根本不提供 HTTP 服务
+- **影响**：健康检查形同虚设，编排层会误判 worker 不可用
+- **修复**：在 compose 里为 worker 覆盖健康检查，改用 Celery 自身的
+  `inspect ping -d celery@$HOSTNAME`。这个检查同时验证三件事：
+  worker 进程活着、能连上 broker、能响应消息
+
+**5. 构建上下文未排除依赖目录**
+- **现象**：Docker 构建每次都要传输 **1.01 GB** 上下文
+- **根因**：缺少 `.dockerignore`，`venv/`（Windows 版依赖，含 .exe/.pyd）、
+  `chroma_data/`、`uploads/` 全被打包发给构建守护进程
+- **影响**：构建慢；且 Windows 的 venv 拷进 Linux 容器完全不可用
+- **修复**：补 `.dockerignore`，上下文 **1.01 GB → 908 B**
+
+**6. 容器内 torch 装成了 CUDA 版**
+- **现象**：镜像体积异常大，构建耗时长
+- **根因**：PyPI 上 Linux 版 `torch` 默认捆绑 CUDA 运行时（2 GB+），
+  而容器根本不挂 GPU，那些库纯属死重量
+- **修复**：改从 PyTorch 官方 CPU 索引安装 —— **2 GB+ → 196 MB**
+
+**7. 依赖解析陷入回溯，构建无法完成**
+- **现象**：`pip install` 连续下载了 **25 个不同版本的 transformers**，
+  跑了 25 分钟仍未收敛
+- **根因**：torch 未锁版本，装到了 2.14.0，与 `sentence-transformers==3.3.1`
+  的约束冲突，pip 开始暴力试错
+- **修复**：从**本地已验证可运行的环境**导出 `pip freeze`，
+  锁定 `transformers==4.46.3` / `tokenizers==0.20.3` /
+  `huggingface_hub==0.36.2` / `safetensors==0.8.0`，并锁死 `torch==2.13.0`
+- **验证**：锁定后 transformers 只下载 2 次即完成
+
+**8. 前端镜像的 Node 版本不满足构建要求**
+- **现象**：容器内 `npm run build` 报
+  `SyntaxError: The requested module 'node:util' does not provide an export named 'styleText'`
+- **根因**：Dockerfile 用 `node:18-alpine`，而项目用的是 Vite 8，
+  其底层打包器 rolldown 依赖 `node:util` 的 `styleText`（Node 20.12 才加入）
+- **影响**：本地开发机是 Node 24 所以完全不会暴露，只在容器里出现
+- **修复**：改用 `node:22-alpine`，并在 `package.json` 补 `engines` 声明，
+  让这类错误在 `npm ci` 阶段就暴露
+
 ### 🏗️ 工程
 - 新增 `scripts/start-redis.bat`、`scripts/start-celery.bat`（含 Redis 可达性预检）
 - 新增 `scripts/enable-wsl.bat`：启用 WSL2 所需功能，含管理员权限自检
 - 新增 `DOCKER_SETUP.md`：Docker 部署准备清单，标注每步「谁执行」与预期问题
+- **Docker 部署落地**（`docker-compose.yml`）：
+  - backend 镜像显式命名，worker 复用同一镜像而非各构建一份
+  - 补 `backend/.dockerignore`、`frontend/.dockerignore`
+  - 基础镜像改用 `node:22-alpine`
+  - pip 源与 torch 源提为构建参数（`PIP_INDEX_URL` / `TORCH_INDEX_URL` / `TORCH_VERSION`）
+  - 后端镜像改以非 root 用户（uid 1000）运行
+  - MySQL 宿主端口映射到 **3307**（3306 通常被宿主机本地 MySQL 占用；
+    容器之间仍走 `mysql:3306`，不受影响）
+  - **`uploads` / `chroma_data` 改用具名卷**而不是绑定宿主机目录 ——
+    否则容器化的空 MySQL 会与宿主机既有的向量数据对不上，
+    产生「向量在、文档表没有」的孤儿数据
+  - 新增 `docker-compose.workarounds.yml`：受限网络环境下的变通
+    （宿主机 Redis 桥接 + 前端健康检查覆盖），网络恢复后去掉 `-f` 参数即可回归标准部署
 - `/run` skill 更新为**四进程架构**（Redis → Celery worker → 后端 → 前端）：
   - 新增 Redis / worker 的启动与验证步骤
   - 健康检查改用 `/api/health/ready`（逐项探测依赖），不再用 `/docs`
@@ -221,14 +292,38 @@
 | 审计链路 | 查询 `/api/admin/audit-logs` | 记录含操作人、目标、IP、request_id |
 | 权限校验 | 普通用户访问审计接口 | 403 |
 | 前端构建 | `tsc -b` + `npm run build` | 均通过 |
+| **Docker 部署** | | |
+| 容器健康 | `docker compose ps` | 5 个容器全部 `healthy`（含 worker 的 Celery ping 检查） |
+| 就绪探针 | `/api/health/ready` | `mysql/chroma/upload_dir` 全 ok，`env=production` |
+| 登录 | `POST /api/auth/login` | HTTP 200 |
+| 审计链路 | `/api/admin/audit-logs` | 登录被正确记录 |
+| **任务队列（容器内）** | 上传文档 | `queue_mode=celery`，worker 日志确认处理 |
+| 状态流转（容器内） | 轮询文档状态 | `queued → processing → ready`（5 分块，4 秒） |
+| 检索与生成（容器内） | 上传后提问 | 1 条来源，回答完全来自刚上传的文档，无编造 |
+| Ollama 推理（容器内） | `/api/generate` | 中文回答正常 |
+| 构建优化 | 上下文体积 | **1.01 GB → 908 B**（`.dockerignore`） |
+| 构建优化 | torch 体积 | **2 GB+ → 196 MB**（CPU 版） |
 
 ### ⚠️ 已知局限
 
-**本版新增但未实测的部分**
-- **Celery 完整链路未实测**：本机未安装 Redis，只验证了降级路径（`queue_mode=thread`）。
-  Celery 的 broker 投递、worker 消费、失败重试、启动对账需要部署 Redis 后才能验证。
-  **代码已按生产标准编写，但「未经实测」这件事必须说清楚**
-- **Docker 部署未实测**：本机未安装 Docker，compose 与 Dockerfile 的改动未经运行验证
+**Docker 部署中的两处临时变通（需在网络恢复后回归）**
+- **Redis 用的是宿主机实例，不是容器**：镜像加速站 daocloud 的 CDN 主机
+  `image-mirror.r2.daocloud.vip` 在部署期间完全不可达（两个 IP 均返回 HTTP 000），
+  而测试的 8 个其它公共镜像站全部被阻断，`redis:7-alpine` 始终拉不下来。
+  临时改用 `docker-compose.workarounds.yml` 把 backend/worker 指向宿主机的 Redis。
+  **网络恢复后执行 `docker compose up -d`（不带 `-f`）即可回归纯容器部署**
+- **backend 镜像是在旧镜像上加补丁层构建的**：`download.pytorch.org` 在部署中途
+  也被阻断（SSL `UNEXPECTED_EOF`），无法完整重建。缺的只有 `beautifulsoup4`
+  （只依赖可用的 PyPI 镜像），因此在其上补了一层。
+  **网络恢复后执行 `docker compose build backend` 即得到正常镜像**
+- 遗留标签 `rag-backend:base` 是补丁的基础层，确认重建成功后可删除
+- 另外还有一处环境限制：`registry.ollama.ai` 被阻断，`qwen2.5:7b` 无法在容器内拉取，
+  实现方式是**把宿主机已有的 4.4GB 模型文件直接复制进容器**
+
+**其它未实测部分**
+- Celery 的失败重试与启动对账逻辑**未做故障注入测试**：
+  已验证正常路径（broker 投递 → worker 消费 → 完成），
+  但「worker 崩溃后任务是否真的被重投」「卡住的文档能否被对账捞回」没有实测
 
 **历史遗留（未解决）**
 - **拒答阈值失效**：可回答问题（0.4354~0.7023）与拒答问题（0.3723~0.7045）的相似度完全重叠，

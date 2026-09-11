@@ -1,0 +1,19 @@
+# 构建上下文排除清单
+#
+# 特别是 node_modules：宿主机装的是 Windows 版依赖（含 .node 原生模块），
+# 拷进 Linux 容器不仅体积巨大（几百 MB），而且原生模块二进制不兼容会直接报错。
+# 容器内用 npm ci 重新装。
+
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.log
+
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+
+.env
+.env.local

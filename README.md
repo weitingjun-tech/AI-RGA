@@ -144,9 +144,30 @@ npm install && npm run dev
 ```bash
 cp backend/.env.example backend/.env   # 并填入 JWT_SECRET
 docker compose up -d
+docker compose ps                      # 六个服务应全部为 healthy
 ```
 
 包含 mysql / redis / ollama / backend / worker / frontend 六个服务。
+
+**首次启动较慢**，原因与耗时：
+
+| 步骤 | 说明 |
+|------|------|
+| 拉取基础镜像 | mysql / redis / ollama / python / node / nginx，约 3 GB |
+| 构建 backend 镜像 | 含 torch（**用 CPU 版，约 200 MB 而非 CUDA 版的 2 GB+**），约 5-10 分钟 |
+| 拉取 qwen2.5:7b | 约 4.7 GB，`docker exec rag-ollama ollama pull qwen2.5:7b` |
+
+**端口分配**（刻意避开宿主机本地环境）：
+
+| 服务 | 宿主机端口 | 说明 |
+|------|-----------|------|
+| frontend | **5174** | 5173 通常被本地 Vite 占用 |
+| backend | 8000 | |
+| mysql | **3307** | 3306 通常被宿主机本地 MySQL 占用 |
+| ollama | 11434 | |
+| redis | 不对外暴露 | 无鉴权，只允许容器网络内访问 |
+
+> 完整的部署记录、踩坑与受限网络下的变通方案，见 [DOCKER_SETUP.md](DOCKER_SETUP.md)。
 
 ---
 

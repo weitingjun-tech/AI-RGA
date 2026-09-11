@@ -1,0 +1,69 @@
+# 环境变通配置（针对受限网络环境）
+#
+# ===========================================================================
+# 这个文件解决两个问题
+# ===========================================================================
+#
+# 【1】用宿主机的 Redis 替代 Redis 容器
+#   原因：拉不到 redis:7-alpine。daocloud 镜像站的 CDN 主机
+#   image-mirror.r2.daocloud.vip 完全不可达（两个 IP 都返回 HTTP 000），
+#   而测试的 8 个其它公共镜像站全部被阻断（南大镜像站返回 403，需校园网）。
+#
+# 【2】修正前端容器的健康检查
+#   原因：容器内 /etc/hosts 把 localhost 解析到 IPv6 的 ::1，
+#   而 nginx 只监听 IPv4 的 0.0.0.0:5173，导致 wget 连不上、容器恒为 unhealthy
+#   （服务本身是正常的，宿主机访问返回 200）。
+#   frontend/Dockerfile 里已改为 127.0.0.1，但重建前端镜像需要拉
+#   node:22-alpine / nginx:alpine，同样被阻断，所以先用 override 顶上。
+#
+# ===========================================================================
+# 用法
+# ===========================================================================
+#   docker compose -f docker-compose.yml -f docker-compose.workarounds.yml up -d
+#
+# 网络恢复后回到标准部署（这个文件就不需要了）：
+#   docker compose up -d
+# ===========================================================================
+#
+# 前置条件：宿主机 6379 端口要有 Redis。本项目提供便携版：
+#   双击 scripts\start-redis.bat
+#
+# 已验证：Docker Desktop(WSL2 后端) 会把宿主机的 127.0.0.1 端口代理给
+# host.docker.internal，因此即使 Redis 只绑 127.0.0.1 也能连通。
+
+services:
+  redis:
+    # 用 profile 把这个服务排除掉 —— 不激活 "host-redis" 就不会启动它。
+    # Compose 的合并规则无法"删除"服务，profile 是最干净的排除方式。
+    profiles: ["host-redis"]
+
+  backend:
+    extra_hosts:
+      # host-gateway 让容器内能解析到宿主机。
+      # Docker Desktop for Windows 通常自带 host.docker.internal，
+      # 这里显式声明是为了在 Linux 上跑 compose 时也成立。
+      - "host.docker.internal:host-gateway"
+    environment:
+      REDIS_URL: redis://host.docker.internal:6379/0
+    # 覆盖掉对 redis 容器的健康依赖（那个容器不会启动）。
+    # !reset 是 Compose 的显式重置标签：不加它，depends_on 会被**合并**
+    # 而不是替换，仍然会去等一个不存在的容器。
+    depends_on:
+      redis: !reset null
+
+  worker:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      REDIS_URL: redis://host.docker.internal:6379/0
+    depends_on:
+      redis: !reset null
+
+  frontend:
+    healthcheck:
+      # 见文件顶部【2】：必须用 IPv4 地址，不能用 localhost
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

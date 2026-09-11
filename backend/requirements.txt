@@ -14,12 +14,33 @@ langchain-community==0.3.14
 langchain-ollama==0.2.2
 chromadb==0.5.23
 sentence-transformers==3.3.1
+
+# ---------------------------------------------------------------------------
+# 以下四个版本必须锁死，与 sentence-transformers==3.3.1 配套。
+#
+# 为什么：不锁的话，构建时 pip 会去解析"最新"版本，而新版 transformers
+# 与 sentence-transformers 3.3.1 的约束冲突，pip 就会陷入**依赖回溯** ——
+# 实测连续下载了 25 个不同版本的 transformers、跑了 25 分钟仍未收敛。
+#
+# 这组版本号是从**本地已验证可运行的环境**里导出的（pip freeze），
+# 不是猜的。升级 sentence-transformers 时这四个要一起重新验证。
+# ---------------------------------------------------------------------------
+transformers==4.46.3
+tokenizers==0.20.3
+huggingface_hub==0.36.2
+safetensors==0.8.0
 rank-bm25==0.2.2
 pypdf==5.1.0
 python-docx==1.1.2
 docx2txt==0.9
 ebooklib==0.20
 mobi==0.4.1
+# kb_service.py 解析 EPUB 时用 BeautifulSoup 抽取正文。
+# 注意：这个包**没有任何其它依赖会引入它**（pip show 的 Required-by 为空），
+# 必须显式声明。本地开发机上当初是手动装的，所以一直没暴露；
+# 换到容器环境后直接 ModuleNotFoundError 崩溃。
+beautifulsoup4==4.15.0
+soupsieve==2.9.2
 markdown==3.7
 aiofiles==24.1.0
 python-dotenv==1.0.1
