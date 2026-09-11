@@ -62,8 +62,8 @@ dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux 
 **为什么必须先做这一步**:Docker Hub 在本网络下不可达,不配镜像的话
 `docker compose up` 会卡在 `docker pull mysql:8.0` 然后超时失败。
 
-在 **`C:\Users\lizhi3\.docker\daemon.json`** 创建文件(目录不存在就新建),
-内容如下:
+**`C:\Users\lizhi3\.docker\daemon.json` 已经准备好了**(我在重启前就写好了),
+内容:
 
 ```json
 {
@@ -71,19 +71,41 @@ dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux 
     "https://docker.m.daocloud.io",
     "https://registry.cn-hangzhou.aliyuncs.com"
   ],
-  "data-root": "D:\\docker-data"
+  "builder": { "gc": { "enabled": true, "defaultKeepStorage": "20GB" } },
+  "features": { "buildkit": true }
 }
 ```
 
-两个字段的作用:
-- `registry-mirrors`:镜像加速站列表,Docker 会按顺序尝试
-- `data-root`:**把镜像和容器数据放到 D 盘**。
-  默认在 `C:\ProgramData\Docker`,而 C 盘只剩 16 GB——
-  光 `ollama/ollama` + 构建 backend 镜像(要装 torch)就需要 5 GB 以上,
-  放 C 盘一定撑爆
+- `registry-mirrors`:镜像加速站,Docker 按顺序尝试。
+  **不配的话 `docker pull` 会直接超时**——Docker Hub 在本网络下不可达
+- `builder.gc`:构建缓存超过 20GB 自动回收。
+  本项目构建 backend 镜像要装 torch,缓存很容易堆到几十 GB
+- `buildkit`:新一代构建引擎,构建更快、缓存更准
 
-> 这个文件 Docker Desktop 首次启动后也能在
-> Settings → Docker Engine 里改,但**先写好再启动更省事**。
+> 也可以在 Docker Desktop 界面改:Settings → Docker Engine,内容一样。
+
+### ⚠️ 数据目录必须另外设置
+
+**`data-root` 不能写在 `daemon.json` 里** —— Docker Desktop 忽略这个字段
+(WSL2 后端下数据实际存在 WSL 发行版的虚拟磁盘里,不走 data-root 机制)。
+
+必须在界面上改:
+
+**Docker Desktop → Settings → Resources → Advanced → Disk image location
+→ 改到 `D:\docker-data`**
+
+为什么非改不可:C 盘只剩 **16 GB**,而:
+- 基础镜像(mysql/redis/ollama/node/python)约 2 GB
+- 构建 backend 镜像要装 `torch` + `sentence-transformers`,**3-5 GB**
+- `qwen2.5:7b` 模型约 4.7 GB
+
+放 C 盘必定撑爆。
+
+改完用这条确认:
+
+```powershell
+docker info --format "{{.DockerRootDir}}"
+```
 
 ---
 
