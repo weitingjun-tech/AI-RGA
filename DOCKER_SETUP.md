@@ -84,28 +84,46 @@ dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux 
 
 > 也可以在 Docker Desktop 界面改:Settings → Docker Engine,内容一样。
 
-### ⚠️ 数据目录必须另外设置
+### ⚠️ 数据目录必须搬到 D 盘（只能在 GUI 里改）
 
-**`data-root` 不能写在 `daemon.json` 里** —— Docker Desktop 忽略这个字段
-(WSL2 后端下数据实际存在 WSL 发行版的虚拟磁盘里,不走 data-root 机制)。
-
-必须在界面上改:
-
-**Docker Desktop → Settings → Resources → Advanced → Disk image location
-→ 改到 `D:\docker-data`**
-
-为什么非改不可:C 盘只剩 **16 GB**,而:
+**为什么非改不可**:C 盘只剩 **12.8 GB**,而:
 - 基础镜像(mysql/redis/ollama/node/python)约 2 GB
 - 构建 backend 镜像要装 `torch` + `sentence-transformers`,**3-5 GB**
 - `qwen2.5:7b` 模型约 4.7 GB
 
-放 C 盘必定撑爆。
+合计约 12 GB,放 C 盘必定撑爆。
 
-改完用这条确认:
+**操作(约 30 秒)**:
+
+> **Docker Desktop → 右上角齿轮 Settings → Resources → Advanced
+> → Disk image location → Browse → 选 `D:\DockerData` → Apply & Restart**
+
+Docker 会自动把现有数据迁过去。
+
+#### 为什么不能自动化(已实测)
+
+我试过三种方式,**都留不住**,记录在这里免得重复踩:
+
+| 尝试 | 结果 |
+|------|------|
+| 在 `daemon.json` 写 `data-root` | ❌ Docker Desktop 忽略该字段(WSL2 后端下数据在发行版虚拟磁盘里,不走 data-root) |
+| 改 `settings-store.json` 的 `DataFolder` | ❌ 值被保留在配置里,但 Docker 启动时**仍在 C 盘重建**发行版 |
+| `wsl --export` / `--unregister` / `--import` 手动迁移 | ❌ 迁到 `D:\DockerData\main` 后,一启动 Docker Desktop 就被**重新注册回** `C:\Users\lizhi3\AppData\Local\Docker\wsl\main` |
+
+**结论**:Docker Desktop 完全接管 WSL 发行版的位置,只有它自己的 GUI 设置
+会触发正式迁移流程。手工改配置或手工搬 WSL 发行版都无效。
+
+#### 迁移后确认
 
 ```powershell
-docker info --format "{{.DockerRootDir}}"
+# 注册表里的发行版位置应指向 D 盘
+Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' |
+  ForEach-Object { (Get-ItemProperty $_.PSPath) } |
+  Where-Object { $_.DistributionName -like '*docker*' } |
+  Select-Object DistributionName, BasePath
 ```
+
+期望 `BasePath` 为 `\\?\D:\DockerData\...`。
 
 ---
 
