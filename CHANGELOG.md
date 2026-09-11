@@ -141,6 +141,9 @@
     产生「向量在、文档表没有」的孤儿数据
   - 新增 `docker-compose.workarounds.yml`：受限网络环境下的变通
     （宿主机 Redis 桥接 + 前端健康检查覆盖），网络恢复后去掉 `-f` 参数即可回归标准部署
+- **前端 `index.html` 清理模板残留**：标题由 Vite 默认的 `frontend` 改为
+  「RAG 知识库问答系统」；`lang="en"` 改为 `lang="zh-CN"`
+  （影响中文断词换行、语音朗读与搜索引擎归类）；补 `description` 与 `theme-color`
 - `/run` skill 更新为**四进程架构**（Redis → Celery worker → 后端 → 前端）：
   - 新增 Redis / worker 的启动与验证步骤
   - 健康检查改用 `/api/health/ready`（逐项探测依赖），不再用 `/docs`

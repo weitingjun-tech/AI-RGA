@@ -1,10 +1,18 @@
 <!doctype html>
-<html lang="en">
+<!-- lang 用 zh-CN：这不是形式。它决定浏览器用什么规则断词换行、用什么语音朗读、
+     以及搜索引擎如何归类。中文页面写 en 会让长段中文的换行与朗读都不正确。 -->
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <!-- 主题色取应用主色，移动端浏览器地址栏会跟着变色 -->
+    <meta name="theme-color" content="#6366f1" />
+    <meta
+      name="description"
+      content="基于检索增强生成（RAG）的企业级知识库问答系统，支持多知识库隔离、混合检索与引用溯源。"
+    />
+    <title>RAG 知识库问答系统</title>
   </head>
   <body>
     <div id="root"></div>
