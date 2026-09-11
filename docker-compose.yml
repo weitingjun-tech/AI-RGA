@@ -97,6 +97,12 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       CHROMA_PERSIST_DIR: /app/chroma_data
       UPLOAD_DIR: /app/uploads
+      # 必须显式设置：容器部署下前端跑在 5174（5173 留给本地 Vite），
+      # 而 backend/.env 里的白名单只有 5173。
+      # 漏设的话浏览器跨域请求会被拦，且**表现为「点登录没反应」**——
+      # 浏览器直接丢弃响应，前端连错误信息都拿不到，极难排查。
+      # 换域名部署时把前端地址加进来（逗号分隔）。
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5174,http://localhost:5173}
       # 让 embedding 模型缓存落到挂载卷，避免每次重建镜像都重新下载
       HF_HOME: /app/huggingface_cache
       # 生产模式下强制走 Celery，Redis 挂了就直接报错，
