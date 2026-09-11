@@ -55,10 +55,20 @@ class TestResolvePath:
     def test_absolute_path_is_untouched(self, tmp_path):
         """绝对路径原样返回。
 
-        用 tmp_path 而不是硬编码的路径字符串：Windows 上 "/var/lib/x"
-        并**不是**绝对路径（没有盘符），硬编码会让这条测试变成"只在 Linux 上成立"。
+        用 `tmp_path` 而不是硬编码字符串 —— 它在**任何平台**上都是绝对路径。
+
+        反面教材：这里原本还断言了 `resolve_path("D:/data/x")`，
+        但 `D:/data/x` **只在 Windows 上是绝对路径**；在 Linux 上没有前导 `/`，
+        `Path.is_absolute()` 返回 False，于是被当成相对路径拼到 backend 目录下，
+        变成 `/app/D:/data/x`。
+
+        后果是：本地 Windows 全绿，**CI 上是一条红的**。
+        跨平台的断言不要依赖某一方的路径语义。
         """
         assert resolve_path(str(tmp_path)) == str(tmp_path)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows 盘符语义")
+    def test_windows_drive_path_is_untouched(self):
         assert resolve_path("D:/data/x") == str(Path("D:/data/x"))
 
     @pytest.mark.skipif(os.name != "nt", reason="这是 Windows 特有的路径语义")

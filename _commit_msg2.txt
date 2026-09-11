@@ -1,0 +1,23 @@
+fix: 测试中的 Windows 路径断言导致 CI 在 Linux 上失败
+
+CI 第一次运行就抓到了问题：本地 Windows 227 个测试全绿，
+GitHub runner（Linux）上 pytest 任务变红。
+
+根因不是产品缺陷，是测试自身的可移植性缺陷：
+test_config.py 断言 resolve_path("D:/data/x") == "D:/data/x"，
+把 Windows 的盘符语义当成了通用事实。
+在 Linux 上 "D:/data/x" 没有前导 /，Path.is_absolute() 为 False，
+被当成相对路径拼到 backend 目录下，实际得到 "/app/D:/data/x"。
+
+修复
+- 盘符断言移入 @pytest.mark.skipif(os.name != "nt") 用例
+- 跨平台的那条只断言 tmp_path（任何平台上都是绝对路径）
+- CHANGELOG 补第 15 条（现象 / 根因 / 影响 / 修复 / 验证方式）
+
+验证方式
+- 用运行中的 Linux 容器（镜像里含全部依赖与代码）复现了该失败，
+  修复后在同一容器内跑通全部测试 —— 而不是仅靠推理判断 Linux 上的行为
+- 本地 Windows 同样全绿
+
+教训
+凡是涉及路径、编码、换行、大小写敏感的部分，本地通过不代表跨平台通过。
