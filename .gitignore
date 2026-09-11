@@ -48,3 +48,6 @@ uploads/*
 .coverage
 coverage.xml
 htmlcov/
+
+# 提交信息临时文件（应由 /save 写到仓库外，此处兜底）
+_commit_msg*.txt
